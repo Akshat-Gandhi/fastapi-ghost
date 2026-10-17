@@ -20,6 +20,11 @@ Keyed by `"METHOD /path"` (e.g. `"GET /todos/{todo_id}"`). Per key:
 Entries written before these fields existed lack them; treat missing as `direct` with an empty chain. `internal_code` is an application-level error code if the body carries one.
 `error_body_shape` is the JSON shape of the error body; use the string `"unknown"` when not seen.
 
+Other fields you may see or add (extra keys are allowed and kept): `undeclared_in_spec` (`true` on an `expected` entry found in code but absent from the OpenAPI docs), `detail_is_literal` (the `detail` text came from a string literal; `false`/unresolved names such as `strings.X` are not the text the client sees), `description` (from the spec), `note` / `auth_note` / `error_body_shape_detail` (free text for reviewers).
+`auth` is read from the spec's `security`. It can be wrong where the code uses optional auth (`required=False`); write `"optional"` plus an `auth_note` when you verified that in the code.
+The scan does not see: raises of a pre-built exception variable (`raise some_error`), auth dependencies that are not linked to a route (they appear in `source_errors.json` with `routes: []`), or an `add_exception_handler(HTTPException, ...)` that changes every error body to something other than `{"detail": ...}` (read the handler and set `error_body_shape` for all 4xx entries, and for 422 if `RequestValidationError` is handled too).
+`spec.json` wraps the OpenAPI document in an `openapi_spec` key.
+
 Example entry:
 ```json
 "GET /todos/{todo_id}": {
