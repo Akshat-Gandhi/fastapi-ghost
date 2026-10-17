@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# fastapi-ghost artifacts
+.ghost/*/results/
+.ghost/*/runs/
+ghost.db
+secret.key
