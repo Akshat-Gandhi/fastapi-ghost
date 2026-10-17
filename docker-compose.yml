@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ghost
+      POSTGRES_PASSWORD: ${GHOST_DB_PASSWORD:-ghost}
+      POSTGRES_DB: ghost
+    volumes:
+      - ghost_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ghost -d ghost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GHOST_DATABASE_URL: postgresql+psycopg://ghost:${GHOST_DB_PASSWORD:-ghost}@db:5432/ghost
+      GHOST_ALLOW_SIGNUP: ${GHOST_ALLOW_SIGNUP:-1}
+      GHOST_SECRET_KEY: ${GHOST_SECRET_KEY:-}
+    volumes:
+      - ghost_data:/data
+    ports:
+      # Bound to localhost only. Change deliberately if you expose this to a network.
+      - "127.0.0.1:${GHOST_PORT:-8080}:8080"
+    extra_hosts:
+      # Lets a project URL of http://localhost:8000 reach a server running on the host.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  ghost_pgdata:
+  ghost_data:

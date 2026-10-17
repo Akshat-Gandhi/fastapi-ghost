@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}fastapi-ghost{% endblock %}</title>
+{% block head %}{% endblock %}
+<style>
+  :root { --bg:#fafafa; --fg:#1b1b1f; --muted:#6b6b76; --card:#fff; --line:#e3e3e8; --accent:#4f46e5; --bad:#c62828; --warn:#b26a00; --good:#2e7d32; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141417; --fg:#ececf1; --muted:#9a9aa6; --card:#1d1d22; --line:#2e2e36; --accent:#8b86ff; --bad:#ff6b6b; --warn:#ffb74d; --good:#66bb6a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,sans-serif; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 24px; border-bottom:1px solid var(--line); background:var(--card); }
+  header a.brand { font-weight:700; color:var(--fg); text-decoration:none; }
+  main { max-width:1000px; margin:0 auto; padding:24px 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  label { display:block; margin:10px 0 4px; font-weight:600; }
+  input[type=text], input[type=email], input[type=password], input[type=number], textarea { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+  textarea { font-family: ui-monospace,monospace; min-height:80px; }
+  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
+  button.link { background:none; color:var(--muted); padding:0; }
+  button.danger { background:var(--bad); }
+  .muted { color:var(--muted); } .error { color:var(--bad); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .flag { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; border:1px solid currentColor; margin-right:4px; }
+  .flag.bad { color:var(--bad); } .flag.warn { color:var(--warn); }
+  .code { font-family:ui-monospace,monospace; }
+  form.inline { display:inline; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">fastapi-ghost</a>
+  {% if user %}<span class="muted">{{ user.email }}
+    <form class="inline" method="post" action="/logout"><button class="link" type="submit">Sign out</button></form></span>{% endif %}
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

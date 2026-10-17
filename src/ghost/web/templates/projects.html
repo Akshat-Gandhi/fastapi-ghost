@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Projects · fastapi-ghost{% endblock %}
+{% block content %}
+<h2>Projects</h2>
+{% for p in projects %}
+<div class="card">
+  <a href="/projects/{{ p.id }}"><strong>{{ p.name }}</strong></a>
+  <span class="muted code"> {{ p.base_url }}</span>
+  {% if p.runs %}<span class="muted"> · last run {{ p.runs[0].status }}</span>{% endif %}
+</div>
+{% else %}<p class="muted">No projects yet. Enroll your first one below.</p>{% endfor %}
+
+<div class="card">
+  <h3>Enroll a project</h3>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/projects">
+    <label for="name">Name</label><input id="name" name="name" type="text" placeholder="My API" required>
+    <label for="base_url">Server URL</label>
+    <input id="base_url" name="base_url" type="text" placeholder="http://localhost:8000 or https://api.example.com" required>
+    <p class="muted">Local URLs (localhost) are routed to your machine when Ghost runs in Docker.</p>
+    <label for="headers">Headers for authentication (one <code>Name: value</code> per line)</label>
+    <textarea id="headers" name="headers" placeholder="Authorization: Bearer &lt;token&gt;"></textarea>
+    <p class="muted">Stored encrypted. Only the header names are shown after saving.</p>
+    <label for="samples">Requests per endpoint (for latency)</label>
+    <input id="samples" name="samples" type="number" value="5" min="1" max="50">
+    <label><input type="checkbox" name="allow_writes" value="1" style="width:auto">
+      Also call POST / PUT / PATCH / DELETE (use a dev or sandbox server, never production)</label>
+    <p><button type="submit">Enroll project</button></p>
+  </form>
+</div>
+{% endblock %}
