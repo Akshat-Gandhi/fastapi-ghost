@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} · fastapi-ghost{% endblock %}
+{% block head %}{% if run.status == "running" %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+<p><a href="/projects/{{ project.id }}">&larr; {{ project.name }}</a></p>
+<h2>Run #{{ run.id }} <span class="muted">· {{ run.status }}</span></h2>
+{% if run.status == "running" %}<p class="muted">Probing endpoints&hellip; this page refreshes itself.</p>{% endif %}
+{% if run.status == "failed" %}<div class="card"><strong class="error">Run failed</strong><p class="code">{{ run.error }}</p></div>{% endif %}
+{% if run.results %}
+{% set eps = run.results.endpoints %}
+<p class="muted">{{ eps|length }} endpoints ·
+  {{ eps|selectattr("flags")|list|length }} with findings ·
+  <a href="/runs/{{ run.id }}/report.json">report.json</a></p>
+<div class="card table-wrap"><table>
+<thead><tr><th>Endpoint</th><th>Declared</th><th>Observed</th><th>p95</th><th>Flags</th></tr></thead>
+<tbody>
+{% for e in eps %}
+<tr>
+  <td class="code">{{ e.method }} {{ e.path }}</td>
+  <td class="code">{{ e.declared_codes|join(", ") }}</td>
+  <td class="code">{% if e.skipped %}<span class="muted">{{ e.skipped }}</span>{% elif e.error %}<span class="error">{{ e.error }}</span>{% else %}{{ e.observed_codes.keys()|join(", ") }}{% endif %}</td>
+  <td>{% if e.latency_ms.p95 is not none %}{{ "%.0f"|format(e.latency_ms.p95) }}ms{% endif %}</td>
+  <td>{% for f in e.flags %}<span class="flag {{ 'bad' if f in ('5XX','UNDECLARED') else 'warn' }}">{{ f }}</span>{% endfor %}</td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · fastapi-ghost{% endblock %}
+{% block content %}
+<p><a href="/projects">&larr; Projects</a></p>
+<h2>{{ project.name }}</h2>
+<div class="card">
+  <div><span class="muted">Server</span> <span class="code">{{ project.base_url }}</span></div>
+  <div><span class="muted">Headers</span> {% if header_names %}{{ header_names|join(", ") }}{% else %}none{% endif %}</div>
+  <div><span class="muted">Writes</span> {{ "enabled" if project.allow_writes else "GET only" }} · <span class="muted">Samples</span> {{ project.samples }}</div>
+  <p>
+    <form class="inline" method="post" action="/projects/{{ project.id }}/run"><button type="submit">Run now</button></form>
+    <form class="inline" method="post" action="/projects/{{ project.id }}/delete"><button class="danger" type="submit">Delete</button></form>
+  </p>
+</div>
+<h3>Runs</h3>
+{% for r in project.runs %}
+<div class="card"><a href="/runs/{{ r.id }}">Run #{{ r.id }}</a> · {{ r.status }} · <span class="muted">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }}</span></div>
+{% else %}<p class="muted">No runs yet.</p>{% endfor %}
+{% endblock %}

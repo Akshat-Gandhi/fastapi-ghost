@@ -1,0 +1,9 @@
+.venv
+.git
+__pycache__
+*.pyc
+.env
+ghost.db
+secret.key
+.pytest_cache
+docs
