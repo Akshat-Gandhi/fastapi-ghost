@@ -5,7 +5,8 @@ from pathlib import Path
 import httpx
 import typer
 
-from .discover import discover
+from . import workspace
+from .discover import discover as discover_endpoints, snapshot_spec
 from .probe import probe_all
 from .report import print_report, write_json
 
@@ -29,7 +30,7 @@ def run(
     base_url = f"http://{host}:{port}"
     with httpx.Client(timeout=10.0) as client:
         try:
-            endpoints = discover(base_url, client)
+            endpoints = discover_endpoints(base_url, client)
         except httpx.HTTPError as exc:
             typer.secho(f"Could not read {base_url}/openapi.json: {exc}", fg="red", err=True)
             raise typer.Exit(2)
@@ -54,3 +55,47 @@ def serve(
         typer.secho("Web app needs extras: pip install 'fastapi-ghost[web]'", fg="red", err=True)
         raise typer.Exit(2)
     uvicorn.run(app_factory, factory=True, host=host, port=port)
+
+
+def _guard(fn):
+    """Per-API commands report problems and exit 2 only for config/tool errors, never for findings."""
+    try:
+        return fn()
+    except (FileNotFoundError, FileExistsError, ValueError) as exc:
+        typer.secho(str(exc), fg="red", err=True)
+        raise typer.Exit(2)
+    except httpx.HTTPError as exc:
+        typer.secho(f"Cannot reach the API: {exc}", fg="red", err=True)
+        raise typer.Exit(2)
+
+
+@app.command()
+def init(
+    api: str = typer.Argument(..., help="Short name for this API, e.g. todo."),
+    url: str = typer.Option(..., help="Base URL, e.g. http://localhost:8000"),
+    source: str = typer.Option(None, help="Path to the API's source code (enables the error-site scan)."),
+    writes: bool = typer.Option(False, "--writes", help="Allow POST/PUT/PATCH/DELETE."),
+    force: bool = typer.Option(False, help="Overwrite an existing api.toml."),
+) -> None:
+    """S0: create .ghost/<api>/api.toml."""
+    path = _guard(lambda: workspace.write_default_config(api, url, source, writes, force))
+    typer.echo(f"Wrote {path}")
+
+
+@app.command()
+def discover(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S1: snapshot /openapi.json and parse endpoints."""
+    def go():
+        cfg = workspace.load_config(api)
+        with httpx.Client(timeout=cfg.timeout_s) as client:
+            return snapshot_spec(api, client)
+    eps = _guard(go)
+    typer.echo(f"Discovered {len(eps)} endpoints -> {workspace.api_dir(api)}/endpoints.json")
+
+
+@app.command()
+def scan(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S2: scan source for `raise HTTPException` sites."""
+    from .scan import run_scan
+    sites = _guard(lambda: run_scan(api))
+    typer.echo(f"Found {len(sites)} raise sites -> {workspace.api_dir(api)}/source_errors.json")

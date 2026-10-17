@@ -87,3 +87,46 @@ def parse_spec(spec: dict) -> list[Endpoint]:
 
 def discover(base_url: str, client: httpx.Client) -> list[Endpoint]:
     return parse_spec(fetch_spec(base_url, client))
+
+
+# --- per-API artifacts -------------------------------------------------------
+
+import re
+from dataclasses import asdict
+
+from . import workspace
+
+
+def operation_id(ep: Endpoint) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", ep.path.lower()).strip("_")
+    return f"{ep.method.lower()}_{slug or 'root'}"
+
+
+def snapshot_spec(api: str, client: httpx.Client) -> list[Endpoint]:
+    """S1: save spec.json (rotating the old one to spec.prev.json) and endpoints.json."""
+    cfg = workspace.load_config(api)
+    spec = fetch_spec(cfg.base_url, client)
+    old = workspace.api_dir(api) / "spec.json"
+    if old.exists():
+        (workspace.api_dir(api) / "spec.prev.json").write_text(old.read_text())
+    workspace.write_json(api, "spec.json", {"openapi_spec": spec})
+    endpoints = parse_spec(spec)
+    workspace.write_json(
+        api, "endpoints.json",
+        {"endpoints": [{"operation_id": operation_id(e), **asdict(e)} for e in endpoints]},
+    )
+    return endpoints
+
+
+def load_endpoints(api: str) -> list[Endpoint]:
+    data = workspace.read_json(api, "endpoints.json", {"endpoints": []})
+    out = []
+    for e in data["endpoints"]:
+        e = {k: v for k, v in e.items() if k != "operation_id"}
+        e["params"] = [Param(**p) for p in e["params"]]
+        out.append(Endpoint(**e))
+    return out
+
+
+def load_spec(api: str) -> dict:
+    return workspace.read_json(api, "spec.json", {}).get("openapi_spec", {})
