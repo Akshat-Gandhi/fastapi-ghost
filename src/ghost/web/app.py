@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..report import FLAG_INFO, OUTCOME_LABELS
+from . import accounts
 from .db import Project, Run, User, UserSession, ensure_admin, make_session_factory, utcnow
 from .runner import execute_run
 from .security import (
@@ -135,6 +136,71 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(COOKIE)
         return resp
+
+    def require_admin(user: User = Depends(require_user)) -> User:
+        if not user.is_admin:
+            raise HTTPException(404, "Not found")  # do not reveal that the page exists
+        return user
+
+    def users_page(request: Request, admin: User, db: Session, error: str | None = None,
+                   notice: str | None = None, status_code: int = 200):
+        rows = db.scalars(select(User).order_by(User.id)).all()
+        return templates.TemplateResponse(
+            request, "users.html", {"user": admin, "users": rows, "error": error, "notice": notice}, status_code=status_code
+        )
+
+    @app.get("/admin/users")
+    def admin_users(request: Request, admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+        return users_page(request, admin, db)
+
+    @app.post("/admin/users")
+    def admin_create_user(
+        request: Request, identifier: str = Form(...), password: str = Form(...),
+        make_admin: str | None = Form(None),
+        admin: User = Depends(require_admin), db: Session = Depends(get_db),
+    ):
+        identifier = identifier.strip().lower()
+        error = None
+        if not identifier or " " in identifier:
+            error = "Enter an email or a username without spaces."
+        elif len(password) < 8 or password in WEAK_PASSWORDS:
+            error = "Initial password must be at least 8 characters and not a default."
+        elif accounts.find_user(db, identifier):
+            error = "That user already exists."
+        if error:
+            return users_page(request, admin, db, error=error, status_code=400)
+        db.add(User(email=identifier, password_hash=hash_password(password), must_change_password=True,
+                    is_admin=make_admin is not None))
+        db.commit()
+        return users_page(request, admin, db, notice=f"Created {identifier}. They must choose a new password at first sign-in.")
+
+    @app.post("/admin/users/{user_id}/reset-password")
+    def admin_reset_password(
+        request: Request, user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db),
+    ):
+        target = db.get(User, user_id)
+        if not target:
+            raise HTTPException(404, "User not found")
+        temp = accounts.reset_password(db, target)
+        return users_page(
+            request, admin, db,
+            notice=f"Temporary password for {target.email}: {temp}  (shown once; they must change it at sign-in)",
+        )
+
+    @app.post("/admin/users/{user_id}/delete")
+    def admin_delete_user(
+        request: Request, user_id: int, admin: User = Depends(require_admin), db: Session = Depends(get_db),
+    ):
+        target = db.get(User, user_id)
+        if not target:
+            raise HTTPException(404, "User not found")
+        if target.id == admin.id:
+            return users_page(request, admin, db, error="You cannot delete your own account.", status_code=400)
+        if target.is_admin and accounts.admin_count(db) <= 1:
+            return users_page(request, admin, db, error="You cannot delete the last admin.", status_code=400)
+        db.delete(target)
+        db.commit()
+        return users_page(request, admin, db, notice=f"Deleted {target.email} and their projects.")
 
     @app.get("/change-password")
     def change_password_page(request: Request, user: User = Depends(require_user_any)):

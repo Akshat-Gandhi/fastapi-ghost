@@ -23,6 +23,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     projects: Mapped[list["Project"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -80,10 +81,15 @@ def make_session_factory(url: str | None = None) -> sessionmaker:
 
 def _migrate(engine) -> None:
     """create_all never alters existing tables, so add columns introduced after a database was created."""
-    if "must_change_password" not in {c["name"] for c in inspect(engine).get_columns("users")}:
-        default = "0" if engine.dialect.name == "sqlite" else "FALSE"
-        with engine.begin() as conn:
+    columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    default = "0" if engine.dialect.name == "sqlite" else "FALSE"
+    with engine.begin() as conn:
+        if "must_change_password" not in columns:
             conn.execute(text(f"ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT {default}"))
+        if "is_admin" not in columns:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT {default}"))
+            # An instance that predates roles: its first account becomes the admin so someone can manage users.
+            conn.execute(text(f"UPDATE users SET is_admin = {'1' if default == '0' else 'TRUE'} WHERE id = (SELECT MIN(id) FROM users)"))
 
 
 def ensure_admin(factory: sessionmaker) -> bool:
@@ -97,6 +103,6 @@ def ensure_admin(factory: sessionmaker) -> bool:
         if db.scalar(select(func.count()).select_from(User)):
             return False
         chosen = os.environ.get("GHOST_ADMIN_PASSWORD")
-        db.add(User(email="admin", password_hash=hash_password(chosen or "admin"), must_change_password=not chosen))
+        db.add(User(email="admin", password_hash=hash_password(chosen or "admin"), must_change_password=not chosen, is_admin=True))
         db.commit()
         return True
