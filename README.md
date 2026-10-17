@@ -10,8 +10,10 @@ It is a **report, not a gate**: findings never fail a build or change an exit co
 git clone https://github.com/Akshat-Gandhi/fastapi-ghost && cd fastapi-ghost
 cp .env.example .env          # optional: set a DB password, disable sign-up
 docker compose up -d
-open http://127.0.0.1:8080     # create an account, enroll a project, press Run
+open http://127.0.0.1:8080     # sign in as admin / admin, choose a new password, enroll a project, press Run
 ```
+
+On a brand-new install the only account is `admin` / `admin`, and you are sent to a change-password page before you can do anything else (any account still using a known default password is forced to change it too). Set `GHOST_ADMIN_PASSWORD` in `.env` to choose the initial password instead. The default account is created only when there are no users at all, so it never appears on an existing instance.
 
 Everything persists in Docker volumes (`ghost_pgdata` for Postgres, `ghost_data` for per-project workspaces and the encryption key). The UI is bound to `127.0.0.1` only.
 
@@ -94,7 +96,8 @@ Agents never call your API; they use `ghost` verbs. Regenerating cases keeps age
 - Writes run only against `localhost` or hosts listed in `allowed_hosts`.
 - `blocked_paths`, `max_rps` and `max_requests` bound what a run can do. Reads run before writes.
 - `api.toml` holds **environment variable names**, never tokens. Stored responses are redacted and scrubbed of the literal token values. Case files containing credentials are rejected.
-- Sign-up can be disabled (`GHOST_ALLOW_SIGNUP=0`); the first account is always allowed.
+- Accounts live in the database (`users` table). Passwords are salted scrypt hashes, session tokens are stored hashed, and project headers are encrypted with `GHOST_SECRET_KEY` (auto-generated into the data volume if unset). Changing a password signs out every other session.
+- Sign-up can be disabled (`GHOST_ALLOW_SIGNUP=0`); the built-in `admin` account is the way in then.
 
 ## Known limits
 
