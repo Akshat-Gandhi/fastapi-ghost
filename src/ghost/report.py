@@ -13,7 +13,8 @@ from .probe import ProbeResult
 SLOW_MS = 500.0
 
 OUTCOME_LABELS = {"expected": "as expected", "mismatch": "unexpected response", "5xx": "server error",
-                  "flaky": "inconsistent", "error": "could not connect"}
+                  "flaky": "inconsistent", "error": "could not connect", "skipped": "not sent",
+                  "open": "open to everyone", "inconclusive": "inconclusive"}
 
 # Stable codes live in report.json; people see these labels. `bad` = needs attention, `warn` = worth a look.
 FLAG_INFO = {
@@ -106,9 +107,15 @@ def write_json(results: list[ProbeResult], path: Path) -> None:
 # --- per-API report (S8) -----------------------------------------------------
 
 from . import workspace
-from .contract import key_of
+from .contract import key_of, statuses
 from .discover import load_endpoints, operation_id
 from .runner import latency_stats
+
+
+def _drift_item(d: dict) -> dict:
+    """Ghost writes drift items as {where, severity, detail}; an agent may write {key, class, note} instead."""
+    return {**d, "where": d.get("where") or d.get("key") or "?", "severity": d.get("severity") or d.get("class") or "unclassified",
+            "detail": d.get("detail") or d.get("note") or d.get("kind") or ""}
 
 
 def build_report(api: str) -> dict:
@@ -120,7 +127,8 @@ def build_report(api: str) -> dict:
     td_counts: dict[str, int] = {}
     for t in teardown:
         td_counts[t["outcome"]] = td_counts.get(t["outcome"], 0) + 1
-    drift = workspace.read_json(api, "drift.json", {"items": []})["items"]
+    drift = [_drift_item(d) for d in workspace.read_json(api, "drift.json", {"items": []}).get("items", [])
+             if isinstance(d, dict)]
     raw = workspace.read_json(api, "explanations.json", {"explanations": []}).get("explanations", [])
     explanations = {e["case_id"]: e for e in raw if isinstance(e, dict) and "case_id" in e} if isinstance(raw, list) else raw
     drifted = {d["where"] for d in drift}
@@ -130,7 +138,10 @@ def build_report(api: str) -> dict:
         entry = contract.get(key, {})
         mine = [r for r in results if r["operation_id"] == operation_id(ep)]
         expected = entry.get("expected", [])
-        declared = sorted({e["status"] for e in expected})
+        # "Declared" means in the OpenAPI docs. Statuses only found in the source are listed apart.
+        in_docs = set(statuses([e for e in expected if e.get("source") == "spec"]))
+        declared = sorted(in_docs or set(statuses(expected)))
+        code_only = sorted(set(statuses(expected)) - set(declared)) if in_docs else []
         observed = sorted({s for r in mine for s in r["statuses"] if s is not None})
         timings = [t for r in mine if r["category"] == "happy" for t in r["timings_ms"]]
         lat = latency_stats(timings)
@@ -141,13 +152,16 @@ def build_report(api: str) -> dict:
             flags.append("FLAKY")
         if any(s >= 500 for s in observed):
             flags.append("5XX")
-        if any(s not in declared for s in observed):
+        # A 401/403 that a login test provoked and expected is not a documentation surprise.
+        auth_only = {r["status"] for r in mine if r["category"] in ("missing_auth", "bad_auth") and r["status"] in (401, 403)}
+        other = {s for r in mine if r["category"] not in ("missing_auth", "bad_auth") for s in r["statuses"] if s is not None}
+        if any(s not in declared and (s in other or s not in auth_only) for s in observed):
             flags.append("UNDECLARED")
         if key in drifted:
             flags.append("DRIFT")
         if any(r["outcome"] in ("mismatch", "error") for r in mine):
             flags.append("CASE_FAILED")
-        raise_sites = {e["status"]: e for e in expected if e.get("raise_site")}
+        raise_sites = {e["status"]: e for e in expected if e.get("raise_site") and isinstance(e["status"], int)}
         error_responses = []
         for r in mine:
             if r["status"] is not None and r["status"] >= 400:
@@ -157,7 +171,18 @@ def build_report(api: str) -> dict:
                     "internal_raise_via": (raise_sites.get(r["status"]) or {}).get("raise_via") or [],
                     "internal_raise_confidence": (raise_sites.get(r["status"]) or {}).get("raise_confidence"),
                 })
+        not_tested = None
+        if not mine:
+            safe = ep.method in ("GET", "HEAD", "OPTIONS")
+            if any(ep.path.startswith(b) for b in cfg.blocked_paths):
+                not_tested = "in blocked_paths"
+            elif not safe and not (cfg.allow_writes and cfg.host_allowed()):
+                not_tested = "changes data and writes are off"
+            else:
+                not_tested = "no test case was valid for it"
         endpoints.append({
+            "not_tested": not_tested, "code_only_codes": code_only,
+            "declared_not_seen": [c for c in declared if c not in observed] if mine else [],
             "method": ep.method, "path": ep.path, "operation_id": operation_id(ep),
             "declared_codes": declared, "observed_codes": observed, "flags": flags, "latency_ms": lat,
             "cases": [{k: r[k] for k in ("case_id", "category", "title", "expected", "status", "outcome")} for r in mine],
@@ -206,13 +231,17 @@ def render_markdown(rep: dict) -> str:
         p95 = e["latency_ms"]["p95"]
         lines.append(
             f"| `{e['method']} {e['path']}` | {','.join(map(str, e['declared_codes']))} | "
-            f"{','.join(map(str, e['observed_codes']))} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {', '.join(FLAG_INFO[f]['label'] for f in e['flags'])} |"
+            f"{','.join(map(str, e['observed_codes'])) or ('not tested: ' + e['not_tested'] if e.get('not_tested') else '')} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {', '.join(FLAG_INFO[f]['label'] for f in e['flags'])} |"
         )
     if rep["drift"]:
         lines += ["", "## Spec drift", ""]
         lines += [f"- **{d['severity']}** `{d['where']}`: {d['detail']}" for d in rep["drift"]]
     for e in rep["endpoints"]:
         lines += ["", f"## `{e['method']} {e['path']}`", ""]
+        if e.get("not_tested"):
+            lines.append(f"Not tested: {e['not_tested']}.")
+        if e.get("declared_not_seen"):
+            lines.append(f"In the docs but never seen in this run: {', '.join(map(str, e['declared_not_seen']))}.")
         for c in e["cases"]:
             lines.append(f"- [{c['outcome']}] {c['category']}: {c['title']} (expected {c['expected']}, got {c['status']})")
         if e["error_responses"]:
@@ -220,7 +249,7 @@ def render_markdown(rep: dict) -> str:
             for er in e["error_responses"]:
                 via = " via " + " -> ".join(er.get("internal_raise_via") or []) if er.get("internal_raise_via") else ""
                 site = f" (raised at `{er['internal_raise_site']}`{via})" if er["internal_raise_site"] else ""
-                lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'])[:300]}`")
+                lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'], ensure_ascii=False)[:300]}`")
         for cid, ex in e["explanations"].items():
             if isinstance(ex, dict):
                 where = f" at `{ex['location']}`" if ex.get("location") else ""
@@ -242,7 +271,7 @@ def write_report(api: str) -> dict:
     rep = build_report(api)
     workspace.write_json(api, "report.json", rep)
     md = workspace.api_dir(api) / "report.md"
-    md.write_text(render_markdown(rep))
+    md.write_text(render_markdown(rep), encoding="utf-8")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     archive = workspace.api_dir(api) / "runs" / stamp
     archive.mkdir(parents=True, exist_ok=True)

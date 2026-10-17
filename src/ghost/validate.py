@@ -17,13 +17,28 @@ from .state import BUILTIN, CAPTURE_NAME, names_in, sample_nonce_only
 _EXPECT_RANGES = {
     "happy": lambda c: 200 <= c < 300,
     "invalid_payload": lambda c: c in (400, 422),
-    "missing_auth": lambda c: c in (401, 403),
-    "bad_auth": lambda c: c in (401, 403),
+    # Apps differ: bad credentials often answer 400 (or 423 when locked), a duplicate often answers 400.
+    "missing_auth": lambda c: c in (400, 401, 403, 422),
+    "bad_auth": lambda c: c in (400, 401, 403, 423),
     "not_found": lambda c: c == 404,
-    "conflict": lambda c: c == 409,
+    "conflict": lambda c: c in (400, 409),
 }
+_EXPECT_HINT = {"happy": "2xx", "invalid_payload": "400 or 422", "missing_auth": "400, 401, 403 or 422",
+                "bad_auth": "400, 401, 403 or 423", "not_found": "404", "conflict": "400 or 409"}
 _AUTH_FOR = {"missing_auth": "none", "bad_auth": "bad"}
 HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate", "teardown_not_allowed"}
+
+
+def _contains_secret(node, secrets: list[str]) -> bool:
+    """A literal credential among the case's values. Compared on values, not keys or substrings of short words:
+    a short password such as "secret" must not trip on a field named client_secret."""
+    if isinstance(node, dict):
+        return any(_contains_secret(v, secrets) for v in node.values())
+    if isinstance(node, list):
+        return any(_contains_secret(v, secrets) for v in node)
+    if isinstance(node, str):
+        return any(node == s or (len(s) >= 8 and s in node) for s in secrets)
+    return False
 
 
 def conforms(payload: Any, schema: dict, spec: dict) -> bool:
@@ -50,6 +65,7 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         problems.append("bad_expected_status")
     elif cat in _EXPECT_RANGES and not any(_EXPECT_RANGES[cat](s) for s in statuses):
         problems.append("expected_status_does_not_match_category")
+        warnings.append(f"hint: a '{cat}' case must expect {_EXPECT_HINT[cat]}; change the category, not the status")
 
     is_write = ep.method not in SAFE_METHODS
     if is_write and not case.get("destructive"):
@@ -70,7 +86,7 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         problems.append(f"unknown_path_params:{sorted(given - names)}")
 
     leaked = [h for h in req.get("headers", {}) if h.lower() in SENSITIVE_HEADERS]
-    if leaked or any(secret in json.dumps(case) for secret in workspace.secret_values(cfg)):
+    if leaked or _contains_secret(case, workspace.secret_values(cfg)):
         problems.append("credentials_in_case")  # cases must use the `auth` mode, never literal credentials
     if cat in _AUTH_FOR and req.get("auth") != _AUTH_FOR[cat]:
         problems.append(f"auth_mode_should_be_{_AUTH_FOR[cat]}")
@@ -173,6 +189,10 @@ def run_validate(api: str) -> dict:
         for case in cf["cases"]:
             if ep is None:
                 verdicts[case["id"]] = {"verdict": "drop", "problems": ["unknown_endpoint"], "warnings": []}
+                continue
+            if case["id"] in verdicts:  # two cases with one id would silently hide each other
+                verdicts[case["id"]]["problems"].append("duplicate_id")
+                verdicts[case["id"]]["verdict"] = "fix" if verdicts[case["id"]]["verdict"] == "ok" else verdicts[case["id"]]["verdict"]
                 continue
             problems, warnings = validate_case(case, ep, cfg, spec)
             problems += validate_state(case, ep, cfg, index, by_key)

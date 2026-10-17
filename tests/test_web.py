@@ -1,5 +1,7 @@
 import json
 
+import httpx
+
 import pytest
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
@@ -292,3 +294,102 @@ def test_old_instance_first_user_becomes_admin(tmp_path):
     with make_session_factory(url)() as db:
         assert db.query(User).filter_by(email="first@x.io").one().is_admin is True
         assert db.query(User).filter_by(email="second@x.io").one().is_admin is False
+
+
+def test_resolve_source_confined_to_mount(tmp_path, monkeypatch):
+    from ghost.web.runner import resolve_source
+    (tmp_path / "app").mkdir()
+    monkeypatch.setenv("GHOST_IN_DOCKER", "1")
+    monkeypatch.setenv("GHOST_SOURCES_DIR", str(tmp_path))
+    assert resolve_source("app") == (tmp_path / "app").resolve()
+    assert resolve_source("../etc") is None
+    assert resolve_source("missing") is None
+    assert resolve_source("") is None
+
+
+def test_project_saves_source_path(client):
+    register(client)
+    r = client.post("/projects", data={"name": "p", "base_url": "http://localhost:1", "source_path": " my-app "})
+    page = client.get(r.headers["location"])
+    assert "my-app" in page.text
+
+
+def test_old_projects_table_gets_source_path(tmp_path):
+    import sqlalchemy as sa
+    url = f"sqlite:///{tmp_path}/old3.db"
+    eng = sa.create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE projects (id INTEGER PRIMARY KEY, user_id INTEGER, name VARCHAR(120), base_url VARCHAR(500), headers_enc TEXT, allow_writes BOOLEAN, samples INTEGER, created_at DATETIME)"))
+    make_session_factory(url)
+    assert "source_path" in {c["name"] for c in sa.inspect(sa.create_engine(url)).get_columns("projects")}
+
+
+def test_connection_refused_in_docker_explains_the_0_0_0_0_requirement(tmp_path, monkeypatch):
+    from ghost.web.db import Project, Run, User
+    from ghost.web.runner import execute_run
+    monkeypatch.setenv("GHOST_IN_DOCKER", "1")
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / "ws"))
+    monkeypatch.setenv("GHOST_DATA_DIR", str(tmp_path))
+    factory = make_session_factory("sqlite:///:memory:")
+    with factory() as db:
+        user = User(email="u@x.io", password_hash="x")
+        db.add(user); db.commit()
+        project = Project(user_id=user.id, name="p", base_url="http://localhost:9", headers_enc="")
+        db.add(project); db.commit()
+        run = Run(project_id=project.id)
+        db.add(run); db.commit()
+        rid = run.id
+    execute_run(factory, rid)
+    with factory() as db:
+        assert "0.0.0.0" in db.get(Run, rid).error
+
+
+def test_project_with_signin_call_and_url_credentials_runs_authenticated(tmp_path, monkeypatch):
+    """The web form can describe a sign-in call and URL credentials; both stay encrypted and are used in memory."""
+    from fastapi import Form
+    from ghost.web.db import Project, Run, User
+    from ghost.web.runner import execute_run
+    from ghost.web.security import build_login, encrypt_headers, encrypt_json
+    import ghost.web.runner as web_runner
+
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / "ws"))
+    monkeypatch.setenv("GHOST_DATA_DIR", str(tmp_path))
+    target = FastAPI()
+
+    @target.post("/token")
+    def token(username: str = Form(...), password: str = Form(...)):
+        if (username, password) != ("me", "s3cret-pw"):
+            raise HTTPException(400, "bad")
+        return {"access_token": "tok-web-1"}
+
+    @target.get("/me")
+    def me(authorization: str = Header(None), key: str = ""):
+        if authorization != "Bearer tok-web-1" or key != "k-1":
+            raise HTTPException(401, "no")
+        return {"ok": True}
+
+    real_client = httpx.Client
+    monkeypatch.setattr(web_runner.httpx, "Client", lambda **kw: TestClient(target, base_url="http://localhost:1"))
+    factory = make_session_factory("sqlite:///:memory:")
+    login = build_login("/token", "form", "username: me\npassword: s3cret-pw", "", "access_token", "Authorization", "Bearer ")
+    assert login["values"]["password"] == "s3cret-pw"
+    with factory() as db:
+        user = User(email="u@x.io", password_hash="x")
+        db.add(user); db.commit()
+        project = Project(user_id=user.id, name="p", base_url="http://localhost:1", headers_enc="",
+                          login_enc=encrypt_json(login), query_enc=encrypt_headers({"key": "k-1"}))
+        db.add(project); db.commit()
+        assert "s3cret-pw" not in project.login_enc  # stored encrypted
+        run = Run(project_id=project.id)
+        db.add(run); db.commit()
+        rid = run.id
+    execute_run(factory, rid)
+    with factory() as db:
+        done = db.get(Run, rid)
+        assert done.status == "done", done.error
+        rep = done.results
+        me_row = next(e for e in rep["endpoints"] if e["path"] == "/me")
+        assert 200 in me_row["observed_codes"]
+        assert "s3cret-pw" not in json.dumps(rep) and "tok-web-1" not in json.dumps(rep)
+    import ghost.workspace as ws
+    assert "project-1" not in ws._SESSION_AUTH  # the token did not outlive the run

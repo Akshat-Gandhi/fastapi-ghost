@@ -110,7 +110,7 @@ def _string_option(sub: dict, spec: dict) -> dict | None:
     return sub if t == "string" else None
 
 
-def unique_string(sub: dict, spec: dict) -> str | None:
+def unique_string(sub: dict, spec: dict, salt: str = "") -> str | None:
     """A template like `ghost-{{nonce}}` that still satisfies the string schema, or None if unsafe to change."""
     s = _string_option(sub, spec)
     if s is None or any(k in s for k in ("enum", "const", "pattern")):
@@ -120,7 +120,7 @@ def unique_string(sub: dict, spec: dict) -> str | None:
         return None
     suffix = "@example.com" if fmt == "email" else ""
     lo, hi = s.get("minLength"), s.get("maxLength")
-    prefix, width = "ghost-", NONCE_LEN
+    prefix, width = (f"gh{salt}-" if salt else "ghost-"), NONCE_LEN
     if hi is not None:
         room = hi - len(suffix)
         if room < 1:
@@ -138,7 +138,7 @@ def unique_string(sub: dict, spec: dict) -> str | None:
     return prefix + tag + suffix
 
 
-def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0) -> Any:
+def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0, salt: str = "") -> Any:
     """Copy of `example` where likely-unique string fields carry a nonce template."""
     if schema is None or depth > 4:
         return copy.deepcopy(example)
@@ -152,13 +152,13 @@ def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0) -> A
             if sub is None:
                 out[name] = copy.deepcopy(val)
             elif isinstance(val, str) and _is_unique_name(name):
-                out[name] = unique_string(sub, spec) or val
+                out[name] = unique_string(sub, spec, salt) or val
             else:
-                out[name] = uniquify(val, sub, spec, depth + 1)
+                out[name] = uniquify(val, sub, spec, depth + 1, salt)
         return out
     if isinstance(example, list):
         item = deref(schema.get("items", {}), spec)
-        return [uniquify(v, item, spec, depth + 1) for v in example]
+        return [uniquify(v, item, spec, depth + 1, salt) for v in example]
     return copy.deepcopy(example)
 
 
@@ -190,6 +190,23 @@ def _success_props(ep: Endpoint, spec: dict) -> dict:
     return {}
 
 
+def _id_field(props: dict, param: str, spec: dict) -> str | None:
+    """Dotted path of the new record's id in the create response: `id`, or `article.slug` for APIs that wrap
+    the record in a single envelope key."""
+    wanted = (param, "id", "uuid", "pk", "slug")
+    direct = next((c for c in wanted if c in props), None)
+    if direct:
+        return direct
+    wrappers = [k for k, v in props.items() if deref(v, spec).get("type") == "object" or "properties" in deref(v, spec)]
+    if len(wrappers) == 1:
+        inner = deref(props[wrappers[0]], spec)
+        if "allOf" in inner:
+            inner = _merge_all_of(inner, spec)
+        found = next((c for c in wanted if c in inner.get("properties", {})), None)
+        return f"{wrappers[0]}.{found}" if found else None
+    return None
+
+
 def find_chains(endpoints: list[Endpoint], spec: dict, op_id) -> dict[str, Chain]:
     """item path -> Chain, for every `POST /things` (no params) that creates something addressable at
     `/things/{param}`. The id must be visible in the documented success response, otherwise nothing is chained."""
@@ -204,7 +221,7 @@ def find_chains(endpoints: list[Endpoint], spec: dict, op_id) -> dict[str, Chain
                 continue
             param = m.group(1)
             props = _success_props(post, spec)
-            field = next((c for c in (param, "id", "uuid", "pk") if c in props), None)
+            field = _id_field(props, param, spec)
             if field is None:
                 continue
             delete = next((e for e in endpoints if e.method == "DELETE" and e.path == other.path), None)

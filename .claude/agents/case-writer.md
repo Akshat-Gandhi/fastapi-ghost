@@ -22,7 +22,10 @@ You write API test cases as JSON data for the fastapi-ghost pipeline. Cases are 
 - Set `destructive` honestly (true for anything that changes state).
 - At most about 12 cases per endpoint; unique stable ids.
 - When fixing, change only the case ids listed as `fix`, following the validator's reason.
-- Only `bash .claude/skills/ghost-cases/scripts/gen.sh <api>` may be run via Bash, for regenerating baselines.
+- Bash is for two things only: `bash .claude/skills/ghost-cases/scripts/gen.sh <api>` (regenerate baselines) and `ghost validate --api <api>` (check your cases; it needs `--api`). Edit the JSON case files with Read/Edit/Write; a throwaway script that only edits those JSON files is fine, but it must not contain test logic or call the API.
+- Ids: baseline ids look like `<op_id>.<category>.<n>`. Use `<op_id>.agent.<n>` for yours so they never clash.
+- A category fixes the allowed expected statuses (see category-recipes.md): happy 2xx, invalid_payload 400/422, missing_auth/bad_auth 401/403, not_found 404, conflict 409. An app that answers a duplicate with 400 is not a `conflict` case: use `invalid_payload` or `observe_5xx` with a wide list, or keep it `happy`-adjacent with a clear title.
+- Baseline cases for user-named resources (usernames, slugs) rely on seed data. Prefer a setup chain that creates the thing, or say so in the title.
 
 ## Must not
 - Write test code (Python, shell, pytest).

@@ -1,11 +1,13 @@
 """Baseline test case generation from the contract (S4). Cases are data (JSON), not code."""
 
 from __future__ import annotations
+import re
+import zlib
 
 from typing import Any
 
 from . import workspace
-from .contract import key_of
+from .contract import key_of, statuses
 from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .probe import _sample_value
 from .schema import deref, example_from_schema, mutate_invalid
@@ -16,6 +18,25 @@ CATEGORIES = {"happy", "invalid_payload", "missing_auth", "bad_auth", "not_found
 MAX_CASES_PER_ENDPOINT = 12
 
 
+def _chain_for(ep: Endpoint, chains: dict[str, Chain]) -> Chain | None:
+    """The chain whose created record this endpoint addresses: the item path itself, or a sub-resource of it
+    (`/articles/{slug}/comments`) which only needs the parent's id."""
+    if ep.method == "POST" and ep.path in chains:
+        return None  # that is the creating call
+    if ep.path in chains:
+        return chains[ep.path] if ep.method in ("GET", "PUT", "PATCH", "DELETE") else None
+    parents = [p for p in chains if ep.path.startswith(p + "/")]
+    return chains[max(parents, key=len)] if parents else None
+
+
+def _missing_id(schema: dict) -> Any:
+    """An id of the right type that no record has, so the answer is 404 rather than a validation error."""
+    if schema.get("type") in ("integer", "number"):
+        return 999999999
+    return {"uuid": "00000000-0000-4000-8000-00000000dead", "email": "ghost-missing@example.com",
+            "date": "1999-01-01", "date-time": "1999-01-01T00:00:00Z"}.get(schema.get("format"), "ghost-missing-id")
+
+
 def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, Any]:
     out = {}
     for p in ep.params:
@@ -23,7 +44,7 @@ def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, A
             continue
         schema = deref(p.schema, spec)
         if missing:
-            out[p.name] = 999999999 if schema.get("type") in ("integer", "number") else "ghost-missing-id"
+            out[p.name] = _missing_id(schema)
         else:
             out[p.name] = example_from_schema(schema, spec) if schema else _sample_value(p.schema)
     return out
@@ -57,13 +78,13 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
     auth = "valid" if (ep.secured or has_auth) else "none"
     base = {"path_params": _path_params(ep, spec), "query": _query(ep, spec), "headers": {},
             "body": example, "auth": auth}
-    expected_codes = [e["status"] for e in entry["expected"]]
+    expected_codes = statuses(entry["expected"])
     success = [c for c in expected_codes if 200 <= c < 300] or [200]
 
     happy_req = dict(base)
     if ep.method in ("POST", "PUT", "PATCH") and ep.body_schema is not None and example is not None:
-        happy_req["body"] = uniquify(example, ep.body_schema, spec)  # fresh values each run: no 409 on re-run
-    chain = chains.get(ep.path) if ep.method in ("GET", "PUT", "PATCH", "DELETE") else None
+        happy_req["body"] = uniquify(example, ep.body_schema, spec, salt=f"{zlib.crc32(op.encode()) % 4096:03x}")  # fresh values each run: no 409 on re-run
+    chain = _chain_for(ep, chains)
     chained_params = {chain.param: "{{%s}}" % chain.capture} if chain else None
     if chain:
         happy_req["path_params"] = {**base["path_params"], **chained_params}
@@ -80,7 +101,11 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
                 "auth": "valid" if (creates.delete_ep.secured or has_auth) else "none",
             }
     cases = []
-    if not (ep.method == "DELETE" and not chain):
+    mutating = ep.method not in SAFE_METHODS
+    seeded = mutating and not chain and (_carries_seed_id(base["query"]) or _carries_seed_id(example))
+    # PUT/PATCH/DELETE on "/me" would change the very account Ghost signs in with, so later requests would fail.
+    self_edit = has_auth and ep.method in ("PUT", "PATCH", "DELETE") and ep.path.rstrip("/").endswith(("/me", "/user"))
+    if not self_edit and not seeded and not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
         # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
         cases.append(happy)
 
@@ -91,10 +116,14 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
             c["setup"] = [chain.create_case_id]
         elif ep.method == "DELETE" and request["auth"] != "valid" and not chain:
             c["request"] = {**request, "path_params": _path_params(ep, spec, missing=True)}  # never hit real data
+        if mutating and not chain and category != "happy":
+            # a request that should be refused must not point at a real record in case the refusal fails open
+            c["request"] = {**c["request"], "query": _unseeded(c["request"].get("query") or {}),
+                            "body": _unseeded(c["request"].get("body"))}
         cases.append(c)
 
     if ep.body_schema is not None:
-        for desc, payload in mutate_invalid(ep.body_schema, example, spec):
+        for desc, payload in mutate_invalid(ep.body_schema, example, spec, form=ep.body_format == "form"):
             add("invalid_payload", desc, {**base, "body": payload}, [422, 400])
     if ep.secured or (has_auth and not public):
         add("missing_auth", "no credentials", {**base, "auth": "none"}, [401, 403])
@@ -103,6 +132,45 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
         add("not_found", "unknown resource id", {**base, "path_params": _path_params(ep, spec, missing=True)}, [404],
             chained=False)
     return cases[:MAX_CASES_PER_ENDPOINT]
+
+
+_ID_NAME = re.compile(r"(^|_)id$|Id$")
+
+
+def _is_seed_id(name: str, value) -> bool:
+    return bool(_ID_NAME.search(name)) and isinstance(value, int) and not isinstance(value, bool)
+
+
+def _carries_seed_id(obj) -> bool:
+    """An integer `id`/`*_id` in a query or body: the example value (1) points at a real, pre-existing record."""
+    if isinstance(obj, dict):
+        return any(_is_seed_id(k, v) or _carries_seed_id(v) for k, v in obj.items())
+    if isinstance(obj, list):
+        return any(_carries_seed_id(v) for v in obj)
+    return False
+
+
+def _unseeded(obj):
+    """Copy of a query/body with every integer id swapped for one no record has."""
+    if isinstance(obj, dict):
+        return {k: (999999999 if _is_seed_id(k, v) else _unseeded(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unseeded(v) for v in obj]
+    return obj
+
+
+def open_by_contract(entry: dict, contract: dict) -> bool:
+    """The contract (after the contract-keeper enriched it) marks some routes as needing auth and this one as
+    not: it is public. A contract where every route says `none` says nothing, so the default applies."""
+    if entry.get("auth") not in (None, "none"):
+        return False
+    return any(e.get("auth") not in (None, "none") for e in contract.values() if isinstance(e, dict))
+
+
+def open_by_spec(ep: Endpoint, endpoints: list[Endpoint]) -> bool:
+    """When the docs mark some operations as secured and not this one, it is public by design (login, signup,
+    health). With no security anywhere in the docs nothing can be said, so the caller's default applies."""
+    return not ep.secured and any(e.secured for e in endpoints)
 
 
 def run_gen(api: str) -> int:
@@ -123,9 +191,22 @@ def run_gen(api: str) -> int:
         entry = contract.get(key_of(ep))
         if not entry:
             continue
-        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths, chains=chains)
+        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths or open_by_spec(ep, endpoints) or open_by_contract(entry, contract), chains=chains)
+        if cfg.login and ep.path == cfg.login["path"]:
+            for c in cases:  # Ghost never puts real credentials in a case; made-up ones are rightly refused
+                if c["category"] == "happy":
+                    c["title"] = "login with made-up credentials is refused (or accepted)"
+                    c["expect"]["status"] = sorted({*c["expect"]["status"], 400, 401, 403, 422})
         existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
-        cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
+        taken = {c["id"] for c in cases}
+        for c in (c for c in existing if c.get("origin") == "agent"):  # never discard the writer agent's work
+            if c["id"] in taken:  # an agent case that reuses a baseline id gets its own: ids must be unique
+                base, n = c["id"].rsplit(".", 1)[0], 1
+                while f"{base}.a{n}" in taken:
+                    n += 1
+                c = {**c, "id": f"{base}.a{n}"}
+            taken.add(c["id"])
+            cases.append(c)
         workspace.write_json(
             api, f"cases/{operation_id(ep)}.json",
             {"operation_id": operation_id(ep), "method": ep.method, "path": ep.path, "cases": cases},

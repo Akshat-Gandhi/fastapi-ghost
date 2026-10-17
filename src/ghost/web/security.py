@@ -68,3 +68,31 @@ def parse_headers(text: str) -> dict[str, str]:
             if name.strip():
                 headers[name.strip()] = value.strip()
     return headers
+
+
+def encrypt_json(data: dict) -> str:
+    return _fernet().encrypt(json.dumps(data).encode()).decode() if data else ""
+
+
+def decrypt_json(blob: str) -> dict:
+    return json.loads(_fernet().decrypt(blob.encode())) if blob else {}
+
+
+def build_login(path: str, kind: str, fields: str, extra: str, token_path: str, header: str, prefix: str) -> dict:
+    """The optional sign-in call of a web project. Field values are literal (stored encrypted, used in memory)."""
+    path = path.strip()
+    if not path:
+        return {}
+    values = parse_headers(fields)  # "name: value" lines; "user.email" builds nested JSON
+    if not values:
+        return {}
+    return {
+        "path": path if path.startswith("/") else "/" + path, "method": "POST",
+        "as": "json" if kind == "json" else "form",
+        "fields": {k: k for k in values},  # env var names are unused: values below are literal
+        "values": values,
+        "extra": parse_headers(extra),
+        "token_path": token_path.strip() or "access_token",
+        "header": header.strip() or "Authorization",
+        "prefix": prefix,
+    }

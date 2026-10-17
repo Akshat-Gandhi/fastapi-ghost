@@ -7,3 +7,4 @@ ghost.db
 secret.key
 .pytest_cache
 docs
+sources

@@ -21,7 +21,8 @@ def make_bundles(api: str) -> list[str]:
         entry = contract.get(key_of(ep), {}) if ep else {}
         bundle = {
             "case_id": r["case_id"], "category": r["category"], "title": r["title"],
-            "request": {"method": r["method"], "path": r["path"], "auth_mode": r["auth"]},
+            "request": {"method": r["method"], "path": r["path"], "auth_mode": r["auth"], **(r.get("request_sent") or {})},
+            "base_url": workspace.load_config(api).base_url, "at": r.get("at"),
             "expected_status": r["expected"], "observed_statuses": r["statuses"],
             "response_body": r["body"], "response_body_truncated": r["body_truncated"],
             "timings_ms": r["timings_ms"], "error": r["error"], "outcome": r["outcome"],

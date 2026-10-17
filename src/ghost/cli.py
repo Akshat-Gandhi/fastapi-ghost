@@ -28,7 +28,7 @@ def run(
 ) -> None:
     """Discover endpoints from /openapi.json, probe them, and print a report."""
     base_url = f"http://{host}:{port}"
-    with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=10.0, limits=workspace.CLIENT_LIMITS) as client:
         try:
             endpoints = discover_endpoints(base_url, client)
         except httpx.HTTPError as exc:
@@ -76,9 +76,10 @@ def init(
     source: str = typer.Option(None, help="Path to the API's source code (enables the error-site scan)."),
     writes: bool = typer.Option(False, "--writes", help="Allow POST/PUT/PATCH/DELETE."),
     force: bool = typer.Option(False, help="Overwrite an existing api.toml."),
+    openapi_path: str = typer.Option("/openapi.json", help="Where the server publishes its OpenAPI document."),
 ) -> None:
     """S0: create .ghost/<api>/api.toml."""
-    path = _guard(lambda: workspace.write_default_config(api, url, source, writes, force))
+    path = _guard(lambda: workspace.write_default_config(api, url, source, writes, force, openapi_path))
     typer.echo(f"Wrote {path}")
 
 
@@ -87,7 +88,7 @@ def discover(api: str = typer.Option(..., help="API name from `ghost init`.")) -
     """S1: snapshot /openapi.json and parse endpoints."""
     def go():
         cfg = workspace.load_config(api)
-        with httpx.Client(timeout=cfg.timeout_s) as client:
+        with httpx.Client(timeout=cfg.timeout_s, limits=workspace.CLIENT_LIMITS) as client:
             return snapshot_spec(api, client)
     eps = _guard(go)
     typer.echo(f"Discovered {len(eps)} endpoints -> {workspace.api_dir(api)}/endpoints.json")
@@ -99,6 +100,10 @@ def scan(api: str = typer.Option(..., help="API name from `ghost init`.")) -> No
     from .scan import run_scan
     sites = _guard(lambda: run_scan(api))
     typer.echo(f"Found {len(sites)} raise sites -> {workspace.api_dir(api)}/source_errors.json")
+    skipped = (workspace.read_json(api, "source_errors.json", {}) or {}).get("unparsed_files")
+    if skipped:
+        typer.secho(f"Warning: {len(skipped)} source file(s) could not be read by this Python (newer syntax?), "
+                    f"so raises in them are not listed: {', '.join(skipped[:5])}", fg="yellow", err=True)
 
 
 @app.command()

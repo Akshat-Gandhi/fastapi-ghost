@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import re
+
 import httpx
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
@@ -27,12 +29,56 @@ class Endpoint:
     body_required: bool = False
     declared_codes: list[str] = field(default_factory=list)
     secured: bool = False
+    body_format: str = "json"  # json | form (application/x-www-form-urlencoded)
 
 
-def fetch_spec(base_url: str, client: httpx.Client, headers: dict[str, str] | None = None) -> dict:
-    resp = client.get(f"{base_url.rstrip('/')}/openapi.json", headers=headers or None)
-    resp.raise_for_status()
-    return resp.json()
+DEFAULT_SPEC_PATH = "/openapi.json"
+_DOCS_URL = re.compile(r"""url:\s*['"]([^'"]+)['"]""")
+
+
+def _spec_path_from_docs(base_url: str, client: httpx.Client, headers: dict[str, str] | None) -> str | None:
+    """Apps with FastAPI(openapi_url=...) still point their Swagger page at the real document."""
+    for docs in ("/docs", "/api/docs", "/api/v1/docs"):
+        try:
+            page = client.get(f"{base_url.rstrip('/')}{docs}", headers=headers or None)
+        except httpx.HTTPError:
+            continue
+        match = _DOCS_URL.search(page.text) if page.status_code == 200 else None
+        if match and match.group(1).startswith("/") and not match.group(1).startswith("//"):
+            return match.group(1)
+    return None
+
+
+def fetch_spec(
+    base_url: str, client: httpx.Client, headers: dict[str, str] | None = None, path: str = "/openapi.json"
+) -> dict:
+    url = f"{base_url.rstrip('/')}{path}"
+    resp = client.get(url, headers=headers or None)
+    if resp.status_code == 404 and path == DEFAULT_SPEC_PATH:
+        found = _spec_path_from_docs(base_url, client, headers)
+        if found and found != path:
+            return fetch_spec(base_url, client, headers, found)
+    if resp.status_code in (401, 403):
+        raise ValueError(
+            f"GET {path} returned {resp.status_code}: the API description needs credentials. "
+            "Add them under [auth] in api.toml (or as headers in the web form)."
+        )
+    if resp.status_code >= 400:
+        raise ValueError(
+            f"GET {path} returned {resp.status_code}. If the API publishes its description elsewhere "
+            "(a custom openapi_url or a sub-path), set openapi_path in api.toml."
+        )
+    try:
+        spec = resp.json()
+    except ValueError:
+        kind = resp.headers.get("content-type", "unknown type").split(";")[0]
+        raise ValueError(
+            f"GET {path} returned {kind}, not JSON. The server may be showing a setup or login page "
+            "instead of the API description, or publishes it at another path (set openapi_path in api.toml)."
+        ) from None
+    if not isinstance(spec, dict) or not isinstance(spec.get("paths"), dict):
+        raise ValueError(f"GET {path} returned JSON, but it is not an OpenAPI document (no 'paths').")
+    return spec
 
 
 def _resolve(ref_or_schema: dict, spec: dict) -> dict:
@@ -64,10 +110,13 @@ def parse_spec(spec: dict) -> list[Endpoint]:
                 for p in (_resolve(p, spec) for p in shared + op.get("parameters", []))
             ]
             body = op.get("requestBody")
-            body_schema = None
+            body_schema, body_format = None, "json"
             if body:
                 body = _resolve(body, spec)
-                content = body.get("content", {}).get("application/json")
+                contents = body.get("content", {})
+                content = contents.get("application/json")
+                if not content and "application/x-www-form-urlencoded" in contents:
+                    content, body_format = contents["application/x-www-form-urlencoded"], "form"
                 if content:
                     body_schema = _resolve(content.get("schema", {}), spec)
             endpoints.append(
@@ -77,6 +126,7 @@ def parse_spec(spec: dict) -> list[Endpoint]:
                     summary=op.get("summary", ""),
                     params=params,
                     body_schema=body_schema,
+                    body_format=body_format,
                     body_required=bool(body and body.get("required")),
                     declared_codes=sorted(op.get("responses", {})),
                     secured=bool(op.get("security")) or global_security,
@@ -104,8 +154,11 @@ def operation_id(ep: Endpoint) -> str:
 
 def snapshot_spec(api: str, client: httpx.Client) -> list[Endpoint]:
     """S1: save spec.json (rotating the old one to spec.prev.json) and endpoints.json."""
+    from .login import ensure_login
+
+    ensure_login(api, client)  # a token first: some APIs hide their description behind sign-in
     cfg = workspace.load_config(api)
-    spec = fetch_spec(cfg.base_url, client, workspace.resolve_auth(cfg, "valid"))
+    spec = fetch_spec(cfg.base_url, client, workspace.resolve_auth(cfg, "valid"), cfg.openapi_path)
     old = workspace.api_dir(api) / "spec.json"
     if old.exists():
         (workspace.api_dir(api) / "spec.prev.json").write_text(old.read_text())

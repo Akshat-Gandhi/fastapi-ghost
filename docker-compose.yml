@@ -27,6 +27,8 @@ services:
       GHOST_ADMIN_PASSWORD: ${GHOST_ADMIN_PASSWORD:-}
     volumes:
       - ghost_data:/data
+      # Put the code of the APIs you test under GHOST_SOURCES (default ./sources); read-only.
+      - ${GHOST_SOURCES:-./sources}:/sources:ro
     ports:
       # Bound to localhost only. Change deliberately if you expose this to a network.
       - "127.0.0.1:${GHOST_PORT:-8080}:8080"

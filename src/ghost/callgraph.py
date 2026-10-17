@@ -158,6 +158,7 @@ class ProjectGraph:
         self._mod_cache: dict[str, list[str]] = {}
         self._edges: dict[str, list[Edge]] = {}
         self.routes: list[Route] = []
+        self.unparsed: list[str] = []  # files this Python could not read (e.g. newer syntax)
 
     # --- building ---------------------------------------------------------
     @classmethod
@@ -169,6 +170,7 @@ class ProjectGraph:
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError, ValueError):
+                g.unparsed.append(str(path.relative_to(root)))
                 continue
             rel = path.relative_to(root)
             parts = list(rel.with_suffix("").parts)

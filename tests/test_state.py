@@ -178,7 +178,7 @@ def test_gen_chains_and_unique_values(env):
     state, client, prepare = env
     prepare()
     post = cases("post_items")["post_items.happy.1"]
-    assert post["request"]["body"]["title"].startswith("ghost-") and "{{nonce" in post["request"]["body"]["title"]
+    assert post["request"]["body"]["title"].startswith("gh") and "{{nonce" in post["request"]["body"]["title"]
     assert post["captures"] == {"item_id": "id"}
     td = post["teardown"]
     assert td["method"] == "DELETE" and td["path"] == "/items/{item_id}" and td["destructive"] is True

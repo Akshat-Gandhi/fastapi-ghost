@@ -15,6 +15,19 @@ from .schema import deref, example_from_schema
 VALIDATION_SHAPE = {"detail": [{"loc": ["body", "<field>"], "msg": "<message>", "type": "<error type>"}]}
 
 
+def statuses(entries: list[dict]) -> list[int]:
+    """Integer HTTP statuses of contract entries. An agent may write "unknown" or "4xx" when the exact status
+    is not known; those are skipped rather than crashing every later stage."""
+    out = []
+    for e in entries:
+        s = e.get("status")
+        if isinstance(s, str) and s.isdigit():
+            s = int(s)
+        if isinstance(s, int) and not isinstance(s, bool):
+            out.append(s)
+    return out
+
+
 def key_of(ep: Endpoint) -> str:
     return f"{ep.method} {ep.path}"
 
@@ -53,7 +66,7 @@ def build_contract(
             shape = VALIDATION_SHAPE if code == "422" else _shape_from_response(resp, spec)
             expected.append({"status": int(code), "source": "spec", "error_body_shape": shape if int(code) >= 400 else None,
                              "description": deref(resp, spec).get("description", "")})
-        declared = {e["status"] for e in expected}
+        declared = set(statuses(expected))
         for site in sites.get(operation_id(ep), []):
             if site.status_code is None:
                 continue
@@ -154,13 +167,15 @@ def update_from_results(contract: dict, results: list[dict]) -> dict:
         entry = contract.get(f"{r['method']} {r['path']}")
         if not entry or r.get("status") is None:
             continue
-        known = {e["status"] for e in entry["expected"]}
+        known = set(statuses(entry["expected"]))
         if r["status"] not in known:
-            seen = next((u for u in entry["unexpected"] if u["status"] == r["status"]), None)
-            if seen:
-                seen["cases"] = sorted(set(seen["cases"]) | {r["case_id"]})
+            # An agent may have written its own `unexpected` entries (a different shape, no `cases`): tolerate them.
+            unexpected = entry.setdefault("unexpected", [])
+            seen = next((u for u in unexpected if isinstance(u, dict) and u.get("status") == r["status"]), None)
+            if seen is not None:
+                seen["cases"] = sorted(set(seen.get("cases") or []) | {r["case_id"]})
             else:
-                entry["unexpected"].append({"status": r["status"], "source": "observed", "cases": [r["case_id"]]})
+                unexpected.append({"status": r["status"], "source": "observed", "cases": [r["case_id"]]})
     return contract
 
 

@@ -44,6 +44,9 @@ class Project(Base):
     headers_enc: Mapped[str] = mapped_column(Text, default="")  # encrypted JSON of header name -> value
     allow_writes: Mapped[bool] = mapped_column(Boolean, default=False)
     samples: Mapped[int] = mapped_column(Integer, default=5)
+    source_path: Mapped[str] = mapped_column(String(500), default="")  # optional: app source, for raise sites
+    login_enc: Mapped[str] = mapped_column(Text, default="")  # encrypted JSON: optional sign-in call
+    query_enc: Mapped[str] = mapped_column(Text, default="")  # encrypted JSON: credentials carried in the URL
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     user: Mapped[User] = relationship(back_populates="projects")
     runs: Mapped[list["Run"]] = relationship(
@@ -76,6 +79,7 @@ def make_session_factory(url: str | None = None) -> sessionmaker:
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
     _migrate(engine)
+    _migrate_projects(engine)
     return sessionmaker(engine, expire_on_commit=False)
 
 
@@ -90,6 +94,16 @@ def _migrate(engine) -> None:
             conn.execute(text(f"ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT {default}"))
             # An instance that predates roles: its first account becomes the admin so someone can manage users.
             conn.execute(text(f"UPDATE users SET is_admin = {'1' if default == '0' else 'TRUE'} WHERE id = (SELECT MIN(id) FROM users)"))
+
+
+def _migrate_projects(engine) -> None:
+    columns = {c["name"] for c in inspect(engine).get_columns("projects")}
+    with engine.begin() as conn:
+        if "source_path" not in columns:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN source_path VARCHAR(500) NOT NULL DEFAULT ''"))
+        for name in ("login_enc", "query_enc"):
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE projects ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))
 
 
 def ensure_admin(factory: sessionmaker) -> bool:
