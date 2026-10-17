@@ -178,10 +178,17 @@ def test_full_user_journey(servers, page):
     # summary + table
     expect(page.get_by_text("endpoints with findings")).to_be_visible()
     row = page.locator("tr", has_text="/calc/average")
-    expect(row).to_contain_text("5XX")
+    expect(row).to_contain_text("Server error")
     expect(row).to_contain_text("500")
-    expect(page.locator("tr", has_text="/slow")).to_contain_text("SLOW")
-    expect(page.locator("tr", has_text="GET /health")).not_to_contain_text("5XX")
+    expect(page.locator("tr", has_text="/slow")).to_contain_text("Slow")
+    expect(page.locator("tr", has_text="GET /health")).not_to_contain_text("Server error")
+    expect(page.get_by_text("What do these labels mean?")).to_be_visible()
+    assert "5XX" not in page.locator("table").inner_text()  # codes stay in the JSON, not in the UI
+
+    page.get_by_text("What do these labels mean?").click()
+    expect(page.get_by_text("crashed or failed internally")).to_be_visible()
+    shot(page, "04b-legend")
+    page.get_by_text("What do these labels mean?").click()
 
     # per-API detail shows what the client sees, and never the token
     detail = page.locator("details", has_text="GET /todos/{todo_id}")
