@@ -60,6 +60,8 @@ class ApiConfig:
     public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
     # Literal header values supplied in memory by the web app (never written to disk).
     auth_values: dict[str, str] = field(default_factory=dict)
+    # Optional HTTP call (method + path on base_url) made before the run to reset server state.
+    reset: dict[str, str] | None = None
 
     def auth_names(self) -> list[str]:
         return list(dict.fromkeys([*self.auth, *self.auth_values]))
@@ -87,6 +89,23 @@ def clear_override(api: str) -> None:
     _OVERRIDES.pop(api, None)
 
 
+RESET_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def parse_reset(raw: Any) -> dict[str, str] | None:
+    """`[reset]` in api.toml: {method, path}. An HTTP call on the same base_url; never a shell command."""
+    if not raw:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"method", "path"}:
+        raise ValueError("[reset] only accepts `method` and `path` (an HTTP call on base_url; no commands)")
+    method, path = str(raw.get("method", "POST")).upper(), str(raw.get("path", ""))
+    if method not in RESET_METHODS:
+        raise ValueError(f"[reset] method must be one of {sorted(RESET_METHODS)}")
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ValueError("[reset] path must start with '/' and is relative to base_url")
+    return {"method": method, "path": path}
+
+
 def load_config(api: str) -> ApiConfig:
     if api in _OVERRIDES:
         return _OVERRIDES[api]
@@ -108,6 +127,7 @@ def load_config(api: str) -> ApiConfig:
         allowed_hosts=list(data.get("allowed_hosts", [])),
         blocked_paths=list(data.get("blocked_paths", [])),
         public_paths=list(data.get("public_paths", DEFAULT_PUBLIC)),
+        reset=parse_reset(data.get("reset")),
     )
 
 
@@ -133,6 +153,11 @@ def write_default_config(api: str, url: str, source: str | None, writes: bool, f
         "# Auth: header name = NAME OF AN ENVIRONMENT VARIABLE holding the value. Never put tokens here.",
         "[auth]",
         '# Authorization = "MY_API_TOKEN_HEADER_VALUE"',
+        "",
+        "# Optional: an HTTP call made before a run (only when writes are allowed) to reset server state.",
+        "# [reset]",
+        '# method = "POST"',
+        '# path = "/admin/reset"',
         "",
     ]
     path.write_text("\n".join(lines))

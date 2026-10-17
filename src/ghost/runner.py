@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import statistics
 import time
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
@@ -15,6 +16,7 @@ from .contract import update_from_results
 from .discover import Endpoint, load_endpoints, operation_id
 from .gen import SAFE_METHODS, load_case_files
 from .redact import redact_body, redact_headers
+from .state import MissingValue, extract, names_in, new_nonce, resolve
 from .workspace import ApiConfig, resolve_auth, scrub_secrets
 
 MAX_BODY_CHARS = 2000
@@ -30,8 +32,18 @@ def percentile(values: list[float], p: float) -> float | None:
     return data[min(len(data) - 1, int(round(p / 100 * (len(data) - 1))))]
 
 
-def build_request(case: dict, ep: Endpoint, cfg: ApiConfig) -> dict:
-    req = case["request"]
+@dataclass
+class RunContext:
+    """In-memory state of one run: the nonce, values captured from responses, and pending teardowns.
+    Never written to disk (captured values may be ids or tokens)."""
+    nonce: str = field(default_factory=new_nonce)
+    values: dict[str, Any] = field(default_factory=dict)
+    teardowns: list[dict] = field(default_factory=list)
+
+
+def build_request(case: dict, ep: Endpoint, cfg: ApiConfig, ctx: RunContext | None = None) -> dict:
+    ctx = ctx or RunContext()
+    req = resolve(case["request"], ctx.values, ctx.nonce)  # raises MissingValue if a capture is absent
     path = ep.path
     for name, value in req.get("path_params", {}).items():
         path = path.replace("{" + name + "}", quote(str(value), safe=""))
@@ -67,15 +79,32 @@ def _capture(resp: httpx.Response, cfg: ApiConfig) -> tuple[Any, bool]:
     return body, truncated
 
 
-def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, budget: list[int]) -> dict:
-    spec = build_request(case, ep, cfg)
+def _skipped(case: dict, ep: Endpoint, error: str) -> dict:
+    return {
+        "case_id": case["id"], "operation_id": case.get("operation_id") or operation_id(ep), "method": ep.method,
+        "path": ep.path, "category": case["category"], "title": case["title"], "auth": case["request"].get("auth"),
+        "expected": case["expect"]["status"], "status": None, "statuses": [None], "body": None,
+        "body_truncated": False, "response_headers": {}, "timings_ms": [], "outcome": "skipped", "error": error,
+    }
+
+
+def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, budget: list[int],
+             ctx: RunContext | None = None) -> dict:
+    ctx = ctx or RunContext()
+    try:
+        spec = build_request(case, ep, cfg, ctx)
+    except MissingValue as exc:
+        return _skipped(case, ep, f"not sent: no value for '{exc.args[0]}' (the setup case did not produce it)")
+    # Keep requests in reserve for the teardowns of what this run has created (and will create).
+    reserve = len(ctx.teardowns) + (1 if case.get("teardown") else 0)
+    first: httpx.Response | None = None
     # Writes run once (repeating would create duplicates); safe methods repeat for latency.
     n = cfg.samples if ep.method in SAFE_METHODS else 1
     statuses: list[int | None] = []
     timings: list[float] = []
     body, truncated, error, headers = None, False, None, {}
     for i in range(n):
-        if budget[0] <= 0:
+        if budget[0] <= reserve:
             error = "request budget (max_requests) exhausted"
             break
         budget[0] -= 1
@@ -86,7 +115,7 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
             try:
                 resp = client.request(**spec)
             except _STALE_CONNECTION:
-                if ep.method not in SAFE_METHODS or budget[0] <= 0:
+                if ep.method not in SAFE_METHODS or budget[0] <= reserve:
                     raise
                 budget[0] -= 1
                 start = time.perf_counter()
@@ -98,11 +127,14 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
         timings.append((time.perf_counter() - start) * 1000)
         statuses.append(resp.status_code)
         if i == 0:
+            first = resp
             body, truncated = _capture(resp, cfg)
             headers = redact_headers({"content-type": resp.headers.get("content-type", "")})
     if not statuses:
         statuses = [None]
     expected = case["expect"]["status"]
+    if first is not None and 200 <= first.status_code < 300:
+        _record_state(case, first, ctx)
     return {
         "case_id": case["id"], "operation_id": case.get("operation_id") or operation_id(ep), "method": ep.method,
         "path": ep.path, "category": case["category"], "title": case["title"], "auth": case["request"].get("auth"),
@@ -110,6 +142,89 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
         "body_truncated": truncated, "response_headers": headers, "timings_ms": timings,
         "outcome": classify_outcome(expected, statuses), "error": error,
     }
+
+
+def _record_state(case: dict, resp: httpx.Response, ctx: RunContext) -> None:
+    """After a successful response: store captured values and queue the case's teardown."""
+    captures = case.get("captures") or {}
+    if captures:
+        try:
+            raw = resp.json()
+        except ValueError:
+            raw = None
+        for name, path in captures.items():
+            value = extract(raw, path)
+            if value is not None:
+                ctx.values[name] = value
+    td = case.get("teardown")
+    if td and names_in(td) <= (set(ctx.values) | {"nonce"}):
+        # Snapshot now: a later case may capture a different value under the same name.
+        ctx.teardowns.append({"case_id": case["id"], "teardown": td,
+                              "path_params": resolve(td.get("path_params", {}), ctx.values, ctx.nonce)})
+
+
+def _blocked(path: str, cfg: ApiConfig) -> bool:
+    return any(path.startswith(b) for b in cfg.blocked_paths)
+
+
+def _writes_ok(cfg: ApiConfig) -> bool:
+    return cfg.allow_writes and cfg.host_allowed()
+
+
+def run_reset(cfg: ApiConfig, client: httpx.Client, budget: list[int]) -> dict | None:
+    """The optional `[reset]` HTTP call. Same gates as any write. Failure is reported, not fatal."""
+    if not cfg.reset:
+        return None
+    out = {"method": cfg.reset["method"], "path": cfg.reset["path"], "status": None, "outcome": "skipped", "error": None}
+    if not _writes_ok(cfg):
+        out["error"] = "writes are not allowed for this host (allow_writes / allowed_hosts)"
+    elif _blocked(cfg.reset["path"], cfg):
+        out["error"] = "reset path is in blocked_paths"
+    elif budget[0] <= 0:
+        out["error"] = "request budget (max_requests) exhausted"
+    else:
+        budget[0] -= 1
+        try:
+            resp = client.request(out["method"], cfg.base_url + out["path"], headers=resolve_auth(cfg, "valid"))
+            out["status"] = resp.status_code
+            out["outcome"] = "ok" if resp.status_code < 400 else "failed"
+        except httpx.HTTPError as exc:
+            out["outcome"], out["error"] = "failed", scrub_secrets(f"{type(exc).__name__}: {exc}", cfg)
+    return out
+
+
+def run_teardowns(ctx: RunContext, cfg: ApiConfig, client: httpx.Client, budget: list[int],
+                  endpoints: dict[tuple[str, str], Endpoint]) -> list[dict]:
+    """Delete what this run created, newest first. Never raises and never affects case outcomes."""
+    out = []
+    for item in reversed(ctx.teardowns):
+        td = item["teardown"]
+        rec = {"case_id": item["case_id"], "method": td.get("method"), "path": td.get("path"),
+               "status": None, "outcome": "skipped", "error": None}
+        out.append(rec)
+        ep = endpoints.get((str(td.get("method")), str(td.get("path"))))
+        if ep is None:
+            rec["error"] = "endpoint not in spec"
+        elif ep.method not in SAFE_METHODS and not _writes_ok(cfg):
+            rec["error"] = "writes are not allowed for this host"
+        elif _blocked(ep.path, cfg):
+            rec["error"] = "path is in blocked_paths"
+        elif budget[0] <= 0:
+            rec["error"] = "request budget (max_requests) exhausted"
+        else:
+            budget[0] -= 1
+            path = ep.path
+            for name, value in item["path_params"].items():
+                path = path.replace("{" + name + "}", quote(str(value), safe=""))
+            try:
+                resp = client.request(ep.method, cfg.base_url + path, headers=resolve_auth(cfg, td.get("auth", "none")))
+                rec["status"] = resp.status_code
+                rec["outcome"] = "ok" if resp.status_code < 300 else ("gone" if resp.status_code == 404 else "failed")
+            except httpx.HTTPError as exc:
+                rec["outcome"], rec["error"] = "failed", scrub_secrets(f"{type(exc).__name__}: {exc}", cfg)
+            except Exception as exc:  # teardown must never break the run
+                rec["outcome"], rec["error"] = "failed", scrub_secrets(f"{type(exc).__name__}: {exc}", cfg)
+    return out
 
 
 def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
@@ -122,25 +237,52 @@ def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
     own_client = client is None
     client = client or httpx.Client(timeout=cfg.timeout_s)
     results: list[dict] = []
+    ctx = RunContext()
     # Reads first, then POST, PUT/PATCH, DELETE last, so a delete cannot remove data a later read needs.
+    # A case with `setup` first runs the cases it names (once per run), so chains keep working across that order.
     order = {"GET": 0, "HEAD": 0, "OPTIONS": 0, "POST": 1, "PUT": 2, "PATCH": 2, "DELETE": 3}
     files = sorted(load_case_files(api), key=lambda cf: order.get(cf["method"], 2))
+    runnable: dict[str, tuple[dict, Endpoint]] = {}  # case id -> (case, endpoint); the first of a duplicate id
+    queue: list[tuple[dict, Endpoint]] = []
+    for cf in files:
+        ep = by_op.get(cf["operation_id"])
+        for case in cf["cases"]:
+            verdict = validation["cases"].get(case["id"], {}).get("verdict")
+            if verdict != "ok" or ep is None:
+                continue  # S6 never runs unvalidated cases
+            # Defence in depth: re-check the write gates here, not only in validate.
+            if ep.method not in SAFE_METHODS and not _writes_ok(cfg):
+                continue
+            if _blocked(ep.path, cfg):
+                continue
+            item = ({**case, "operation_id": cf["operation_id"]}, ep)
+            runnable.setdefault(case["id"], item)
+            queue.append(item)
+    done: set[int] = set()
+
+    def execute(item: tuple[dict, Endpoint]) -> None:
+        if id(item) in done:
+            return
+        done.add(id(item))  # before recursing: a setup cycle cannot loop
+        case, ep = item
+        for sid in case.get("setup") or []:
+            if sid in runnable:
+                execute(runnable[sid])
+        results.append(run_case(case, ep, cfg, client, budget, ctx))
+
+    reset_result, teardown_results = None, []
     try:
-        for cf in files:
-            ep = by_op.get(cf["operation_id"])
-            for case in cf["cases"]:
-                verdict = validation["cases"].get(case["id"], {}).get("verdict")
-                if verdict != "ok" or ep is None:
-                    continue  # S6 never runs unvalidated cases
-                # Defence in depth: re-check the write gates here, not only in validate.
-                if ep.method not in SAFE_METHODS and (not cfg.allow_writes or not cfg.host_allowed()):
-                    continue
-                case = {**case, "operation_id": cf["operation_id"]}
-                results.append(run_case(case, ep, cfg, client, budget))
+        reset_result = run_reset(cfg, client, budget)
+        for item in queue:
+            execute(item)
     finally:
-        if own_client:
-            client.close()
-    workspace.write_json(api, "results/results.json", {"results": results})
+        try:
+            teardown_results = run_teardowns(ctx, cfg, client, budget, {(e.method, e.path): e for e in by_op.values()})
+        finally:
+            if own_client:
+                client.close()
+    state = {"reset": reset_result, "teardown": teardown_results}
+    workspace.write_json(api, "results/results.json", {"results": results, **state})
     contract = workspace.read_json(api, "contract.json")
     if contract:
         contract.pop("schema_version", None)

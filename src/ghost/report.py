@@ -114,7 +114,12 @@ from .runner import latency_stats
 def build_report(api: str) -> dict:
     cfg = workspace.load_config(api)
     contract = workspace.read_json(api, "contract.json", {})
-    results = workspace.read_json(api, "results/results.json", {"results": []})["results"]
+    raw_results = workspace.read_json(api, "results/results.json", {"results": []})
+    results = raw_results["results"]
+    teardown = raw_results.get("teardown") or []
+    td_counts: dict[str, int] = {}
+    for t in teardown:
+        td_counts[t["outcome"]] = td_counts.get(t["outcome"], 0) + 1
     drift = workspace.read_json(api, "drift.json", {"items": []})["items"]
     raw = workspace.read_json(api, "explanations.json", {"explanations": []}).get("explanations", [])
     explanations = {e["case_id"]: e for e in raw if isinstance(e, dict) and "case_id" in e} if isinstance(raw, list) else raw
@@ -165,8 +170,24 @@ def build_report(api: str) -> dict:
             "endpoints": len(endpoints), "cases_run": len(results), "outcomes": outcomes,
             "with_findings": sum(1 for e in endpoints if e["flags"]), "drift_items": len(drift),
         },
+        # Housekeeping around the run: reported, never counted as a finding or an exit-code change.
+        "state": {"reset": raw_results.get("reset"), "teardown": td_counts,
+                  "teardown_problems": [t for t in teardown if t["outcome"] in ("failed", "skipped")]},
         "drift": drift, "endpoints": endpoints,
     }
+
+
+def _state_lines(state: dict) -> list[str]:
+    lines = []
+    reset = state.get("reset")
+    if reset:
+        detail = f"status {reset['status']}" if reset.get("status") else reset.get("error") or ""
+        lines.append(f"- Reset `{reset['method']} {reset['path']}`: {reset['outcome']} ({detail})")
+    if state.get("teardown"):
+        lines.append("- Cleanup of data Ghost created: " + ", ".join(f"{n} {k}" for k, n in state["teardown"].items()))
+        for t in state.get("teardown_problems", []):
+            lines.append(f"  - teardown {t['outcome']} for `{t['case_id']}`: {t.get('error') or 'status ' + str(t['status'])}")
+    return lines + [""] if lines else []
 
 
 def render_markdown(rep: dict) -> str:
@@ -176,6 +197,7 @@ def render_markdown(rep: dict) -> str:
         "This report is informational and never blocks a build.", "",
         f"- Endpoints: {s['endpoints']}  - Cases run: {s['cases_run']}  - Endpoints with findings: {s['with_findings']}",
         f"- Cases: {', '.join(f'{n} {OUTCOME_LABELS.get(k, k)}' for k, n in s['outcomes'].items())}  - Spec changes since last run: {s['drift_items']}", "",
+        *_state_lines(rep.get("state") or {}),
         "| Endpoint | Declared | Observed | p95 | Flags |", "|---|---|---|---|---|",
     ]
     for e in rep["endpoints"]:
