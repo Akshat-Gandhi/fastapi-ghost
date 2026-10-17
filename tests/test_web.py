@@ -110,3 +110,95 @@ def test_failed_run_is_reported_not_lost(client, monkeypatch, tmp_path):
     run_url = client.post(f"/projects/{pid}/run").headers["location"]
     data = client.get(run_url + "/report.json").json()
     assert data["status"] == "failed" and data["error"]
+
+
+# --- default admin and forced password change ---------------------------------
+
+def login(c, who="admin", pw="admin"):
+    return c.post("/login", data={"email": who, "password": pw})
+
+
+def test_fresh_install_has_admin_that_must_change_password(client):
+    r = login(client)
+    assert r.status_code == 303 and r.headers["location"] == "/change-password"
+    for path in ("/projects", "/projects/1", "/runs/1"):
+        assert client.get(path).headers["location"] == "/change-password"
+    assert client.get("/change-password").status_code == 200
+    assert client.post("/projects", data={"name": "x", "base_url": "http://x"}).headers["location"] == "/change-password"
+
+
+def test_change_password_rules_and_effect(client):
+    login(client)
+    def change(cur, new, conf=None):
+        return client.post("/change-password", data={"current_password": cur, "new_password": new, "confirm_password": conf or new})
+    assert change("wrong", "newpassw0rd").status_code == 400
+    assert change("admin", "newpassw0rd", "different1").status_code == 400
+    assert change("admin", "short").status_code == 400
+    assert change("admin", "admin").status_code == 400
+    assert client.get("/projects").headers["location"] == "/change-password"  # still forced
+    ok = change("admin", "a-much-better-pass")
+    assert ok.status_code == 303 and ok.headers["location"] == "/projects"
+    assert client.get("/projects").status_code == 200
+    fresh = TestClient(client.app, follow_redirects=False)
+    assert login(fresh).status_code == 401                          # admin/admin no longer works
+    assert login(fresh, pw="a-much-better-pass").headers["location"] == "/projects"
+
+
+def test_other_sessions_are_signed_out_on_password_change(client):
+    other = TestClient(client.app, follow_redirects=False)
+    login(other)
+    login(client)
+    client.post("/change-password", data={"current_password": "admin", "new_password": "a-much-better-pass", "confirm_password": "a-much-better-pass"})
+    assert other.get("/change-password").headers["location"] == "/login"
+    assert client.get("/projects").status_code == 200
+
+
+def test_admin_is_only_seeded_on_empty_database(tmp_path, monkeypatch):
+    from ghost.web.db import User
+    monkeypatch.setenv("GHOST_DATA_DIR", str(tmp_path))
+    factory = make_session_factory("sqlite:///:memory:")
+    app = create_app(factory)
+    with factory() as db:
+        assert db.query(User).filter_by(email="admin").count() == 1
+    create_app(factory)  # second start must not add or reset anything
+    with factory() as db:
+        assert db.query(User).count() == 1
+
+
+def test_no_admin_is_added_to_an_instance_that_already_has_users(tmp_path, monkeypatch):
+    from ghost.web.db import User, ensure_admin
+    from ghost.web.security import hash_password
+    factory = make_session_factory("sqlite:///:memory:")
+    with factory() as db:
+        db.add(User(email="real@x.io", password_hash=hash_password("password123")))
+        db.commit()
+    assert ensure_admin(factory) is False
+    with factory() as db:
+        assert db.query(User).filter_by(email="admin").count() == 0
+
+
+def test_env_password_skips_forced_change(tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_ADMIN_PASSWORD", "operator-chosen-pw")
+    c = TestClient(create_app(make_session_factory("sqlite:///:memory:")), follow_redirects=False)
+    assert login(c, pw="admin").status_code == 401
+    assert login(c, pw="operator-chosen-pw").headers["location"] == "/projects"
+
+
+def test_account_still_on_weak_password_is_forced_to_change(client):
+    register(client, "weak@x.io", "password1")  # allowed length-wise, but a known weak default
+    client.post("/logout")
+    assert login(client, "weak@x.io", "password1").headers["location"] == "/change-password"
+
+
+def test_existing_database_gets_the_new_column(tmp_path):
+    import sqlalchemy as sa
+    url = f"sqlite:///{tmp_path}/old.db"
+    eng = sa.create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE users (id INTEGER PRIMARY KEY, email VARCHAR(255) UNIQUE, password_hash VARCHAR(255), created_at DATETIME)"))
+        conn.execute(sa.text("INSERT INTO users (email, password_hash) VALUES ('old@x.io', 'x')"))
+    factory = make_session_factory(url)
+    with factory() as db:
+        from ghost.web.db import User
+        assert db.query(User).filter_by(email="old@x.io").one().must_change_password is False
+        assert db.query(User).filter_by(email="admin").count() == 0  # existing instance: no default account appears

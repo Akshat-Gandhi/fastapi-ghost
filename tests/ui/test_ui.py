@@ -126,7 +126,7 @@ def test_anonymous_is_sent_to_login_and_bad_login_is_explained(servers, page):
     page.get_by_label("Email").fill("nobody@x.io")
     page.get_by_label("Password").fill("wrong-password")
     page.get_by_role("button", name="Sign in").click()
-    expect(page.get_by_text("Wrong email or password.")).to_be_visible()
+    expect(page.get_by_text("Wrong email/username or password.")).to_be_visible()
     shot(page, "01-login-error")
     assert page.errors == [] or all("401" in e for e in page.errors)  # the 401 resource log is expected
 
@@ -336,4 +336,41 @@ def test_logged_in_pages_contrast(servers, browser, seeded, scheme):
         assert (ratio := pg.evaluate(_LUMINANCE_JS, sel)) >= 4.5, f"{scheme} {name}: {ratio:.2f}"
     if scheme == "dark":
         shot(pg, "08-dark-report")
+    ctx.close()
+
+
+def test_default_admin_is_forced_to_change_password(servers, browser):
+    ghost = servers["ghost"]
+    ctx = browser.new_context()
+    pg = ctx.new_page()
+    pg.goto(f"{ghost}/login")
+    pg.get_by_label("Email or username").fill("admin")
+    pg.get_by_label("Password").fill("admin")
+    pg.get_by_role("button", name="Sign in").click()
+    expect(pg).to_have_url(f"{ghost}/change-password")
+    expect(pg.get_by_text("You are using a default password")).to_be_visible()
+    shot(pg, "09-forced-change-password")
+
+    pg.goto(f"{ghost}/projects")  # cannot skip the change
+    expect(pg).to_have_url(f"{ghost}/change-password")
+
+    pg.get_by_label("Current password").fill("admin")
+    pg.get_by_label("New password (8+ characters)").fill("password")  # long enough for the browser, still a default
+    pg.get_by_label("Confirm new password").fill("password")
+    pg.get_by_role("button", name="Change password").click()
+    expect(pg).to_have_url(f"{ghost}/change-password")
+    expect(pg.get_by_role("alert")).to_contain_text("not a default")
+
+    pg.get_by_label("Current password").fill("admin")
+    pg.get_by_label("New password (8+ characters)").fill("a-much-better-pass")
+    pg.get_by_label("Confirm new password").fill("a-much-better-pass")
+    pg.get_by_role("button", name="Change password").click()
+    expect(pg).to_have_url(f"{ghost}/projects")
+    expect(pg.get_by_role("link", name="Change password")).to_be_visible()  # available any time afterwards
+
+    pg.get_by_role("button", name="Sign out").click()
+    pg.get_by_label("Email or username").fill("admin")
+    pg.get_by_label("Password").fill("admin")
+    pg.get_by_role("button", name="Sign in").click()
+    expect(pg.get_by_text("Wrong email/username or password.")).to_be_visible()
     ctx.close()
