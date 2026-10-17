@@ -17,7 +17,7 @@ from .discover import Endpoint, load_endpoints, operation_id
 from .gen import SAFE_METHODS, load_case_files
 from .redact import redact_body, redact_headers
 from .state import MissingValue, extract, names_in, new_nonce, resolve
-from .workspace import ApiConfig, resolve_auth, scrub_secrets
+from .workspace import ApiConfig, resolve_auth, resolve_auth_query, scrub_secrets
 
 MAX_BODY_CHARS = 2000
 # A pooled keep-alive connection can be closed by the server just as we reuse it. That is not an API
@@ -48,9 +48,14 @@ def build_request(case: dict, ep: Endpoint, cfg: ApiConfig, ctx: RunContext | No
     for name, value in req.get("path_params", {}).items():
         path = path.replace("{" + name + "}", quote(str(value), safe=""))
     headers = {**req.get("headers", {}), **resolve_auth(cfg, req.get("auth", "none"))}
-    kwargs: dict[str, Any] = {"params": req.get("query") or None, "headers": headers}
+    query = {k: v for k, v in (req.get("query") or {}).items() if k not in cfg.auth_query}
+    query.update(resolve_auth_query(cfg, req.get("auth", "none")))
+    kwargs: dict[str, Any] = {"params": query or None, "headers": headers}
     if req.get("body") is not None:
-        kwargs["json"] = req["body"]
+        if ep.body_format == "form" and isinstance(req["body"], dict):
+            kwargs["data"] = {k: v if isinstance(v, str) else json.dumps(v) for k, v in req["body"].items()}
+        else:
+            kwargs["json"] = req["body"]
     return {"method": ep.method, "url": cfg.base_url + path, **kwargs}
 
 
@@ -212,7 +217,7 @@ def run_reset(cfg: ApiConfig, client: httpx.Client, budget: list[int]) -> dict |
     else:
         budget[0] -= 1
         try:
-            resp = client.request(out["method"], cfg.base_url + out["path"], headers=resolve_auth(cfg, "valid"))
+            resp = client.request(out["method"], cfg.base_url + out["path"], headers=resolve_auth(cfg, "valid"), params=resolve_auth_query(cfg, "valid") or None)
             out["status"] = resp.status_code
             out["outcome"] = "ok" if resp.status_code < 400 else "failed"
         except httpx.HTTPError as exc:
@@ -244,16 +249,17 @@ def run_teardowns(ctx: RunContext, cfg: ApiConfig, client: httpx.Client, budget:
             for name, value in item["path_params"].items():
                 path = path.replace("{" + name + "}", quote(str(value), safe=""))
             headers = resolve_auth(cfg, td.get("auth", "none"))
+            params = resolve_auth_query(cfg, td.get("auth", "none")) or None
             try:
                 try:
-                    resp = client.request(ep.method, cfg.base_url + path, headers=headers)
+                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, params=params)
                 except _STALE_CONNECTION:
                     # A teardown DELETE is idempotent, so (unlike case writes) one retry on a stale pooled
                     # connection is safe: a 404 on the retry is reported as `gone`.
                     if ep.method != "DELETE" or budget[0] <= 0:
                         raise
                     budget[0] -= 1
-                    resp = client.request(ep.method, cfg.base_url + path, headers=headers)
+                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, params=params)
                 rec["status"] = resp.status_code
                 rec["outcome"] = "ok" if resp.status_code < 300 else ("gone" if resp.status_code == 404 else "failed")
             except httpx.HTTPError as exc:

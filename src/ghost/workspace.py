@@ -55,6 +55,7 @@ class ApiConfig:
     max_rps: float = 20.0
     max_requests: int = 2000
     auth: dict[str, str] = field(default_factory=dict)  # header name -> ENV VAR NAME
+    auth_query: dict[str, str] = field(default_factory=dict)  # query parameter name -> ENV VAR NAME (token in the URL)
     allowed_hosts: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
     public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
@@ -72,7 +73,7 @@ class ApiConfig:
         return list(dict.fromkeys([*self.auth, *self.auth_values, *login]))
 
     def has_auth(self) -> bool:
-        return bool(self.auth or self.auth_values or self.login)
+        return bool(self.auth or self.auth_values or self.login or self.auth_query)
 
     def host_allowed(self) -> bool:
         """Writes only run against local hosts or hosts explicitly allowed."""
@@ -95,7 +96,7 @@ def clear_override(api: str) -> None:
 
 
 _SESSION_AUTH: dict[str, dict[str, str]] = {}  # api -> headers obtained by [login]; memory only, never on disk
-LOGIN_KEYS = {"path", "method", "as", "fields", "token_path", "header", "prefix"}
+LOGIN_KEYS = {"path", "method", "as", "fields", "extra", "token_path", "header", "prefix"}
 
 
 def parse_login(raw: Any) -> dict[str, Any] | None:
@@ -116,6 +117,7 @@ def parse_login(raw: Any) -> dict[str, Any] | None:
     return {
         "path": path, "method": str(raw.get("method", "POST")).upper(), "as": kind,
         "fields": {str(k): str(v) for k, v in fields.items()},
+        "extra": dict(raw.get("extra", {})),  # fixed, non-secret form fields such as scope = "me items"
         "token_path": str(raw.get("token_path", "access_token")),
         "header": str(raw.get("header", "Authorization")),
         "prefix": str(raw.get("prefix", "Bearer ")),
@@ -158,6 +160,7 @@ def load_config(api: str) -> ApiConfig:
         max_rps=float(data.get("max_rps", 20.0)),
         max_requests=int(data.get("max_requests", 2000)),
         auth=dict(data.get("auth", {})),
+        auth_query=dict(data.get("auth_query", {})),
         allowed_hosts=list(data.get("allowed_hosts", [])),
         blocked_paths=list(data.get("blocked_paths", [])),
         public_paths=list(data.get("public_paths", DEFAULT_PUBLIC)),
@@ -193,6 +196,10 @@ def write_default_config(
         "[auth]",
         '# Authorization = "MY_API_TOKEN_HEADER_VALUE"',
         "",
+        "# Auth carried in the URL instead of a header (query parameter name = env var NAME):",
+        "# [auth_query]",
+        '# token = "MY_API_TOKEN"',
+        "",
         "# Optional: sign in once per run and send the token on every request. Values are env var NAMES.",
         "# [login]",
         '# path = "/api/v1/login/access-token"',
@@ -226,9 +233,18 @@ def resolve_auth(cfg: ApiConfig, mode: str) -> dict[str, str]:
     raise ValueError(f"Unknown auth mode {mode!r}")
 
 
+def resolve_auth_query(cfg: ApiConfig, mode: str) -> dict[str, str]:
+    """Query parameters that carry credentials, per auth mode (none: left out; bad: a wrong value)."""
+    if mode == "valid":
+        return {n: v for n, env in cfg.auth_query.items() if (v := os.environ.get(env))}
+    if mode == "bad":
+        return {n: INVALID_TOKEN for n in cfg.auth_query}
+    return {}
+
+
 def secret_values(cfg: ApiConfig) -> list[str]:
     login = [v for env in (cfg.login or {}).get("fields", {}).values() if (v := os.environ.get(env))]
-    return [*(v for env in cfg.auth.values() if (v := os.environ.get(env))), *cfg.auth_values.values(), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
+    return [*(v for env in [*cfg.auth.values(), *cfg.auth_query.values()] if (v := os.environ.get(env))), *cfg.auth_values.values(), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
 
 
 def scrub_secrets(text: str, cfg: ApiConfig) -> str:

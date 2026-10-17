@@ -143,6 +143,11 @@ def run_gen(api: str) -> int:
         if not entry:
             continue
         cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths, chains=chains)
+        if cfg.login and ep.path == cfg.login["path"]:
+            for c in cases:  # Ghost never puts real credentials in a case; made-up ones are rightly refused
+                if c["category"] == "happy":
+                    c["title"] = "login with made-up credentials is refused (or accepted)"
+                    c["expect"]["status"] = sorted({*c["expect"]["status"], 400, 401, 403, 422})
         existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
         cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
         workspace.write_json(

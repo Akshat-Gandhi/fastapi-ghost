@@ -221,3 +221,42 @@ def test_sub_resources_use_the_parent_chain():
     assert _chain_for(mk("POST", "/a/{slug}/comments"), chains) is chain
     assert _chain_for(mk("POST", "/a/{slug}"), chains) is None
     assert _chain_for(mk("GET", "/b/{id}"), chains) is None
+
+
+def test_token_in_the_url_is_sent_hidden_and_swapped(home, monkeypatch):
+    from ghost.runner import build_request
+    monkeypatch.setenv("URL_TOKEN", "url-secret")
+    workspace.write_default_config("q", "http://localhost:1", None, False)
+    path = workspace.api_dir("q") / "api.toml"
+    path.write_text(path.read_text() + '\n[auth_query]\ntoken = "URL_TOKEN"\n')
+    cfg = workspace.load_config("q")
+    e = ep()
+    sent = lambda mode: build_request({"request": {"query": {"token": "string", "x": 1}, "auth": mode}}, e, cfg)["params"]
+    assert sent("valid") == {"x": 1, "token": "url-secret"}
+    assert sent("none") == {"x": 1}
+    assert sent("bad")["token"] != "url-secret"
+    assert cfg.has_auth() and "url-secret" in workspace.secret_values(cfg)
+
+
+def test_pattern_strings_and_short_password_false_positive():
+    from ghost.schema import example_from_schema
+    from ghost.validate import _contains_secret
+    assert example_from_schema({"type": "string", "pattern": "^password$"}, {}) == "password"
+    assert example_from_schema({"type": "string", "pattern": "^(a|b)$"}, {}) == "a"
+    assert example_from_schema({"type": "string", "pattern": r"^\d{6}$"}, {}) == "123456"
+    assert not _contains_secret({"body": {"client_secret": "x"}, "title": "a secret thing"}, ["secret"])
+    assert _contains_secret({"body": {"password": "secret"}}, ["secret"])
+    assert _contains_secret({"h": "Bearer abcdefgh1234"}, ["abcdefgh1234"])
+
+
+def test_form_bodies_are_sent_as_forms():
+    from ghost.discover import parse_spec
+    from ghost.runner import build_request
+    spec = {"paths": {"/token": {"post": {"requestBody": {"required": True, "content": {
+        "application/x-www-form-urlencoded": {"schema": {"type": "object", "properties": {"username": {"type": "string"}}}}}},
+        "responses": {"200": {}}}}}}
+    (endpoint,) = parse_spec(spec)
+    assert endpoint.body_format == "form"
+    cfg = workspace.ApiConfig(base_url="http://localhost:1")
+    sent = build_request({"request": {"body": {"username": "u", "n": 3}, "auth": "none"}}, endpoint, cfg)
+    assert sent["data"] == {"username": "u", "n": "3"} and "json" not in sent

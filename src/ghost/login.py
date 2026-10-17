@@ -28,7 +28,7 @@ def ensure_login(api: str, client: httpx.Client) -> bool:
     spec = cfg.login
     if not spec:
         return False
-    payload = {}
+    payload: dict = dict(spec.get("extra", {}))
     for field, env in spec["fields"].items():
         value = os.environ.get(env)
         if value is None:

@@ -172,6 +172,7 @@ def build_report(api: str) -> dict:
                 not_tested = "no test case was valid for it"
         endpoints.append({
             "not_tested": not_tested,
+            "declared_not_seen": [c for c in declared if c not in observed] if mine else [],
             "method": ep.method, "path": ep.path, "operation_id": operation_id(ep),
             "declared_codes": declared, "observed_codes": observed, "flags": flags, "latency_ms": lat,
             "cases": [{k: r[k] for k in ("case_id", "category", "title", "expected", "status", "outcome")} for r in mine],
@@ -229,6 +230,8 @@ def render_markdown(rep: dict) -> str:
         lines += ["", f"## `{e['method']} {e['path']}`", ""]
         if e.get("not_tested"):
             lines.append(f"Not tested: {e['not_tested']}.")
+        if e.get("declared_not_seen"):
+            lines.append(f"In the docs but never seen in this run: {', '.join(map(str, e['declared_not_seen']))}.")
         for c in e["cases"]:
             lines.append(f"- [{c['outcome']}] {c['category']}: {c['title']} (expected {c['expected']}, got {c['status']})")
         if e["error_responses"]:

@@ -29,6 +29,7 @@ class Endpoint:
     body_required: bool = False
     declared_codes: list[str] = field(default_factory=list)
     secured: bool = False
+    body_format: str = "json"  # json | form (application/x-www-form-urlencoded)
 
 
 DEFAULT_SPEC_PATH = "/openapi.json"
@@ -109,10 +110,13 @@ def parse_spec(spec: dict) -> list[Endpoint]:
                 for p in (_resolve(p, spec) for p in shared + op.get("parameters", []))
             ]
             body = op.get("requestBody")
-            body_schema = None
+            body_schema, body_format = None, "json"
             if body:
                 body = _resolve(body, spec)
-                content = body.get("content", {}).get("application/json")
+                contents = body.get("content", {})
+                content = contents.get("application/json")
+                if not content and "application/x-www-form-urlencoded" in contents:
+                    content, body_format = contents["application/x-www-form-urlencoded"], "form"
                 if content:
                     body_schema = _resolve(content.get("schema", {}), spec)
             endpoints.append(
@@ -122,6 +126,7 @@ def parse_spec(spec: dict) -> list[Endpoint]:
                     summary=op.get("summary", ""),
                     params=params,
                     body_schema=body_schema,
+                    body_format=body_format,
                     body_required=bool(body and body.get("required")),
                     declared_codes=sorted(op.get("responses", {})),
                     secured=bool(op.get("security")) or global_security,
