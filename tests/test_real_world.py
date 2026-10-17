@@ -444,3 +444,11 @@ def test_contract_update_tolerates_agent_written_unexpected_entries():
     assert out[0]["cases"] == ["a"] and {u["status"] for u in out} == {500, 418}
     bare = {"GET /y": {"expected": []}}
     assert update_from_results(bare, [{"method": "GET", "path": "/y", "status": 404, "case_id": "c"}])["GET /y"]["unexpected"]
+
+
+def test_report_accepts_drift_items_in_the_agents_shape():
+    from ghost.report import _drift_item
+    assert _drift_item({"key": "GET /a", "class": "breaking", "note": "x", "kind": "k"}) == {
+        "key": "GET /a", "class": "breaking", "note": "x", "kind": "k", "where": "GET /a", "severity": "breaking", "detail": "x"}
+    assert _drift_item({"where": "GET /b", "severity": "additive", "detail": "d"})["where"] == "GET /b"
+    assert _drift_item({})["severity"] == "unclassified"
