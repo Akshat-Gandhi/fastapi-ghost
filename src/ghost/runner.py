@@ -65,6 +65,30 @@ def classify_outcome(expected: list[int], statuses: list[int | None]) -> str:
     return "5xx" if status >= 500 else "mismatch"
 
 
+AUTH_CATEGORIES = ("missing_auth", "bad_auth")
+# Statuses that mean "your request was rejected before login mattered" (bad body, unknown id, locked item, ...).
+PRECONDITION_STATUSES = {400, 404, 405, 409, 415, 422, 423}
+
+
+def refine_outcome(outcome: str, case: dict, ep: Endpoint, status: int | None) -> str:
+    """Separate real surprises from results that say nothing about the endpoint.
+
+    open: a no-login request worked on an endpoint the docs never call protected (informational).
+    inconclusive: the request was refused for a reason unrelated to what the case tests, e.g. the sample
+    record does not exist, so there is nothing to learn from it."""
+    if outcome != "mismatch" or status is None:
+        return outcome
+    category = case["category"]
+    if category in AUTH_CATEGORIES:
+        if 200 <= status < 300 and not ep.secured:
+            return "open"
+        if status in PRECONDITION_STATUSES:
+            return "inconclusive"
+    if category == "happy" and status == 404 and not case.get("setup") and any(p.location == "path" for p in ep.params):
+        return "inconclusive"  # nothing exists at the made-up id; a record Ghost created would be needed
+    return outcome
+
+
 def _capture(resp: httpx.Response, cfg: ApiConfig) -> tuple[Any, bool]:
     text = resp.text
     truncated = len(text) > MAX_BODY_CHARS
@@ -140,7 +164,7 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
         "path": ep.path, "category": case["category"], "title": case["title"], "auth": case["request"].get("auth"),
         "expected": expected, "status": statuses[0], "statuses": statuses, "body": body,
         "body_truncated": truncated, "response_headers": headers, "timings_ms": timings,
-        "outcome": classify_outcome(expected, statuses), "error": error,
+        "outcome": refine_outcome(classify_outcome(expected, statuses), case, ep, statuses[0]), "error": error,
     }
 
 
@@ -237,6 +261,14 @@ def run_teardowns(ctx: RunContext, cfg: ApiConfig, client: httpx.Client, budget:
 
 
 def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
+    from .login import ensure_login
+
+    own_login = client or httpx.Client(timeout=workspace.load_config(api).timeout_s)
+    try:
+        ensure_login(api, own_login)
+    finally:
+        if client is None:
+            own_login.close()
     cfg = workspace.load_config(api)
     validation = workspace.read_json(api, "validation.json")
     if not validation:

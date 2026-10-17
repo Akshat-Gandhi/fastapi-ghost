@@ -76,9 +76,10 @@ def init(
     source: str = typer.Option(None, help="Path to the API's source code (enables the error-site scan)."),
     writes: bool = typer.Option(False, "--writes", help="Allow POST/PUT/PATCH/DELETE."),
     force: bool = typer.Option(False, help="Overwrite an existing api.toml."),
+    openapi_path: str = typer.Option("/openapi.json", help="Where the server publishes its OpenAPI document."),
 ) -> None:
     """S0: create .ghost/<api>/api.toml."""
-    path = _guard(lambda: workspace.write_default_config(api, url, source, writes, force))
+    path = _guard(lambda: workspace.write_default_config(api, url, source, writes, force, openapi_path))
     typer.echo(f"Wrote {path}")
 
 

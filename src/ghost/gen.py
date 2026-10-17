@@ -16,6 +16,14 @@ CATEGORIES = {"happy", "invalid_payload", "missing_auth", "bad_auth", "not_found
 MAX_CASES_PER_ENDPOINT = 12
 
 
+def _missing_id(schema: dict) -> Any:
+    """An id of the right type that no record has, so the answer is 404 rather than a validation error."""
+    if schema.get("type") in ("integer", "number"):
+        return 999999999
+    return {"uuid": "00000000-0000-4000-8000-00000000dead", "email": "ghost-missing@example.com",
+            "date": "1999-01-01", "date-time": "1999-01-01T00:00:00Z"}.get(schema.get("format"), "ghost-missing-id")
+
+
 def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, Any]:
     out = {}
     for p in ep.params:
@@ -23,7 +31,7 @@ def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, A
             continue
         schema = deref(p.schema, spec)
         if missing:
-            out[p.name] = 999999999 if schema.get("type") in ("integer", "number") else "ghost-missing-id"
+            out[p.name] = _missing_id(schema)
         else:
             out[p.name] = example_from_schema(schema, spec) if schema else _sample_value(p.schema)
     return out
