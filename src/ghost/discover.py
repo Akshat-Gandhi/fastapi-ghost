@@ -29,8 +29,8 @@ class Endpoint:
     secured: bool = False
 
 
-def fetch_spec(base_url: str, client: httpx.Client) -> dict:
-    resp = client.get(f"{base_url.rstrip('/')}/openapi.json")
+def fetch_spec(base_url: str, client: httpx.Client, headers: dict[str, str] | None = None) -> dict:
+    resp = client.get(f"{base_url.rstrip('/')}/openapi.json", headers=headers or None)
     resp.raise_for_status()
     return resp.json()
 
@@ -105,7 +105,7 @@ def operation_id(ep: Endpoint) -> str:
 def snapshot_spec(api: str, client: httpx.Client) -> list[Endpoint]:
     """S1: save spec.json (rotating the old one to spec.prev.json) and endpoints.json."""
     cfg = workspace.load_config(api)
-    spec = fetch_spec(cfg.base_url, client)
+    spec = fetch_spec(cfg.base_url, client, workspace.resolve_auth(cfg, "valid"))
     old = workspace.api_dir(api) / "spec.json"
     if old.exists():
         (workspace.api_dir(api) / "spec.prev.json").write_text(old.read_text())

@@ -1,5 +1,7 @@
+import json
+
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
 
 from ghost.web.app import create_app
@@ -54,27 +56,57 @@ def test_headers_are_encrypted_at_rest(client):
     assert "s3cret" not in blob and blob
 
 
-def test_run_cycle_end_to_end(client, monkeypatch):
-    """Enroll a project, run it against a stub server, read the report."""
+def make_target():
     target = FastAPI()
 
-    @target.get("/ping")
-    def ping():
+    @target.get("/data")
+    def data_ep(authorization: str = Header(None)):
+        if authorization != "Bearer tok":
+            raise HTTPException(401, "bad token")
         return {"ok": True}
 
     @target.get("/boom")
-    def boom():
+    def boom(authorization: str = Header(None)):
+        if authorization != "Bearer tok":
+            raise HTTPException(401, "bad token")
         raise HTTPException(500, "x")
 
+    return target
+
+
+def test_run_cycle_end_to_end(client, monkeypatch, tmp_path):
+    """Enroll a project with auth headers, run the full pipeline, read the report."""
     import ghost.web.runner as runner
-    import httpx
-    real_client = httpx.Client
-    monkeypatch.setattr(runner.httpx, "Client", lambda **kw: TestClient(target, base_url="http://t", headers=kw.get("headers")))
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / "ws"))
+    target = make_target()
+    monkeypatch.setattr(
+        runner.httpx, "Client", lambda **kw: TestClient(target, base_url="http://t", headers=kw.get("headers"))
+    )
     register(client)
-    pid = client.post("/projects", data={"name": "p", "base_url": "http://t", "samples": "2"}).headers["location"].split("/")[-1]
+    pid = client.post(
+        "/projects", data={"name": "p", "base_url": "http://localhost:9", "samples": "2",
+                           "headers": "Authorization: Bearer tok"},
+    ).headers["location"].split("/")[-1]
     run_url = client.post(f"/projects/{pid}/run").headers["location"]
     data = client.get(run_url + "/report.json").json()
     assert data["status"] == "done", data
-    flags = {(e["path"]): e["flags"] for e in data["endpoints"]}
-    assert "5XX" in flags["/boom"] and flags["/ping"] == []
-    assert client.get(run_url).status_code == 200
+    eps = {e["path"]: e for e in data["endpoints"]}
+    assert eps["/data"]["flags"] == [] or "UNDECLARED" in eps["/data"]["flags"]
+    happy = next(c for c in eps["/data"]["cases"] if c["category"] == "happy")
+    assert happy["outcome"] == "expected" and happy["status"] == 200  # stored header was sent
+    assert "5XX" in eps["/boom"]["flags"]
+    assert any(c["category"] == "missing_auth" and c["status"] == 401 for c in eps["/data"]["cases"])
+    page = client.get(run_url)
+    assert page.status_code == 200 and "/boom" in page.text and "never blocks" in page.text
+    md = client.get(run_url + "/report.md")
+    assert md.status_code == 200 and "# API report" in md.text
+    assert "Bearer tok" not in md.text and "Bearer tok" not in json.dumps(data)
+
+
+def test_failed_run_is_reported_not_lost(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / "ws"))
+    register(client)
+    pid = client.post("/projects", data={"name": "p", "base_url": "http://127.0.0.1:1"}).headers["location"].split("/")[-1]
+    run_url = client.post(f"/projects/{pid}/run").headers["location"]
+    data = client.get(run_url + "/report.json").json()
+    assert data["status"] == "failed" and data["error"]

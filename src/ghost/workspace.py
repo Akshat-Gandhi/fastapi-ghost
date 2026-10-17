@@ -58,6 +58,14 @@ class ApiConfig:
     allowed_hosts: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
     public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
+    # Literal header values supplied in memory by the web app (never written to disk).
+    auth_values: dict[str, str] = field(default_factory=dict)
+
+    def auth_names(self) -> list[str]:
+        return list(dict.fromkeys([*self.auth, *self.auth_values]))
+
+    def has_auth(self) -> bool:
+        return bool(self.auth or self.auth_values)
 
     def host_allowed(self) -> bool:
         """Writes only run against local hosts or hosts explicitly allowed."""
@@ -67,7 +75,21 @@ class ApiConfig:
         return host in {"localhost", "127.0.0.1", "::1", "host.docker.internal"} or host in self.allowed_hosts
 
 
+_OVERRIDES: dict[str, ApiConfig] = {}
+
+
+def set_override(api: str, cfg: ApiConfig) -> None:
+    """Use `cfg` for `api` instead of api.toml (the web app builds configs from its database)."""
+    _OVERRIDES[api] = cfg
+
+
+def clear_override(api: str) -> None:
+    _OVERRIDES.pop(api, None)
+
+
 def load_config(api: str) -> ApiConfig:
+    if api in _OVERRIDES:
+        return _OVERRIDES[api]
     path = api_dir(api) / "api.toml"
     if not path.exists():
         raise FileNotFoundError(f"{path} not found. Run: ghost init {api} --url http://localhost:8000")
@@ -122,9 +144,9 @@ def resolve_auth(cfg: ApiConfig, mode: str) -> dict[str, str]:
     if mode == "none":
         return {}
     if mode == "bad":
-        return {name: INVALID_TOKEN for name in cfg.auth}
+        return {name: INVALID_TOKEN for name in cfg.auth_names()}
     if mode == "valid":
-        headers = {}
+        headers = dict(cfg.auth_values)
         for name, env in cfg.auth.items():
             value = os.environ.get(env)
             if value:
@@ -134,7 +156,7 @@ def resolve_auth(cfg: ApiConfig, mode: str) -> dict[str, str]:
 
 
 def secret_values(cfg: ApiConfig) -> list[str]:
-    return [v for env in cfg.auth.values() if (v := os.environ.get(env))]
+    return [*(v for env in cfg.auth.values() if (v := os.environ.get(env))), *cfg.auth_values.values()]
 
 
 def scrub_secrets(text: str, cfg: ApiConfig) -> str:

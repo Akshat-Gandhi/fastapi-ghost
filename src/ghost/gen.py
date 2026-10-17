@@ -69,7 +69,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
 def run_gen(api: str) -> int:
     endpoints, spec = load_endpoints(api), load_spec(api)
     cfg = workspace.load_config(api)
-    has_auth = bool(cfg.auth)
+    has_auth = cfg.has_auth()
     contract = workspace.read_json(api, "contract.json")
     if not contract:
         raise FileNotFoundError(f"No contract for {api}. Run: ghost contract --api {api}")
