@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..report import FLAG_INFO, OUTCOME_LABELS
 from .db import Project, Run, User, UserSession, make_session_factory, utcnow
 from .runner import execute_run
 from .security import (
@@ -22,6 +23,8 @@ from .security import (
 COOKIE = "ghost_session"
 SESSION_DAYS = 14
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+templates.env.globals["FLAGS"] = FLAG_INFO
+templates.env.globals["OUTCOMES"] = OUTCOME_LABELS
 
 
 def create_app(factory: sessionmaker | None = None) -> FastAPI:

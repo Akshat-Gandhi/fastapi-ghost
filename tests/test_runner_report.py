@@ -210,3 +210,12 @@ def test_report_reads_agent_explanations(env):
     assert boom["explanations"]["get_boom.happy.1"]["class"] == "API bug"
     md = (workspace.api_dir("todo") / "report.md").read_text()
     assert "API bug, high confidence" in md and "app.py:9" in md
+
+
+def test_report_uses_plain_labels_and_legend(env):
+    run_all("todo", env)
+    rep = write_report("todo")
+    assert any("5XX" in e["flags"] for e in rep["endpoints"])  # json keeps the stable code
+    md = (workspace.api_dir("todo") / "report.md").read_text()
+    assert "Server error" in md and "5XX" not in md
+    assert "## What the labels mean" in md and "crashed or failed internally" in md

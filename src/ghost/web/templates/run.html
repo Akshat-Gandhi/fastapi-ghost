@@ -13,7 +13,7 @@
 <div class="card">
   <strong>{{ s.endpoints }}</strong> endpoints · <strong>{{ s.cases_run }}</strong> cases run ·
   <strong>{{ s.with_findings }}</strong> endpoints with findings · <strong>{{ s.drift_items }}</strong> spec changes since last run
-  <div class="muted">Outcomes: {% for k, v in s.outcomes.items() %}{{ k }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+  <div class="muted">Cases: {% for k, v in s.outcomes.items() %}{{ v }} {{ OUTCOMES.get(k, k) }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
 </div>
 {% if rep.drift %}
 <div class="card"><strong>Spec drift</strong>
@@ -29,10 +29,15 @@
   <td class="code hide-sm">{{ e.declared_codes|join(", ") }}</td>
   <td class="code">{{ e.observed_codes|join(", ") }}</td>
   <td class="hide-sm">{% if e.latency_ms.p95 is not none %}{{ "%.0f"|format(e.latency_ms.p95) }}ms{% endif %}</td>
-  <td>{% for f in e.flags %}<span class="flag {{ 'bad' if f in ('5XX','UNDECLARED','DRIFT') else 'warn' }}">{{ f }}</span>{% endfor %}</td>
+  <td>{% for f in e.flags %}<span class="flag {{ FLAGS[f].level }}" title="{{ FLAGS[f].help }}">{{ FLAGS[f].label }}</span>{% endfor %}</td>
 </tr>
 {% endfor %}
 </tbody></table></div>
+<details class="card">
+  <summary>What do these labels mean?</summary>
+  <ul>{% for code, f in FLAGS.items() %}
+    <li><span class="flag {{ f.level }}">{{ f.label }}</span> {{ f.help }}</li>{% endfor %}</ul>
+</details>
 <h3>Per-API detail</h3>
 {% for e in rep.endpoints %}
 <details class="card">

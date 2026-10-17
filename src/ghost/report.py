@@ -12,6 +12,25 @@ from .probe import ProbeResult
 
 SLOW_MS = 500.0
 
+OUTCOME_LABELS = {"expected": "as expected", "mismatch": "unexpected response", "5xx": "server error",
+                  "flaky": "inconsistent", "error": "could not connect"}
+
+# Stable codes live in report.json; people see these labels. `bad` = needs attention, `warn` = worth a look.
+FLAG_INFO = {
+    "5XX": {"label": "Server error", "level": "bad",
+            "help": "The API crashed or failed internally (it answered with a 5xx status)."},
+    "UNDECLARED": {"label": "Not in the docs", "level": "bad",
+                   "help": "The API answered with a status code its OpenAPI docs never mention, e.g. a 401 that is not documented."},
+    "DRIFT": {"label": "Changed since last run", "level": "bad",
+              "help": "This endpoint's definition changed in the OpenAPI spec compared with the previous run."},
+    "CASE_FAILED": {"label": "Unexpected response", "level": "warn",
+                    "help": "A test got a different status than it expected, e.g. a request without a login was accepted."},
+    "FLAKY": {"label": "Inconsistent", "level": "warn",
+              "help": "The same request returned different statuses on different tries."},
+    "SLOW": {"label": "Slow", "level": "warn",
+             "help": "The 95th-percentile response time was above the slow threshold (default 500 ms)."},
+}
+
 
 def _flags(r: ProbeResult) -> list[str]:
     flags = []
@@ -156,14 +175,14 @@ def render_markdown(rep: dict) -> str:
         f"# API report: {rep['api']}", "", f"Server: `{rep['base_url']}`  ",
         "This report is informational and never blocks a build.", "",
         f"- Endpoints: {s['endpoints']}  - Cases run: {s['cases_run']}  - Endpoints with findings: {s['with_findings']}",
-        f"- Outcomes: {s['outcomes']}  - Spec drift items: {s['drift_items']}", "",
+        f"- Cases: {', '.join(f'{n} {OUTCOME_LABELS.get(k, k)}' for k, n in s['outcomes'].items())}  - Spec changes since last run: {s['drift_items']}", "",
         "| Endpoint | Declared | Observed | p95 | Flags |", "|---|---|---|---|---|",
     ]
     for e in rep["endpoints"]:
         p95 = e["latency_ms"]["p95"]
         lines.append(
             f"| `{e['method']} {e['path']}` | {','.join(map(str, e['declared_codes']))} | "
-            f"{','.join(map(str, e['observed_codes']))} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {' '.join(e['flags'])} |"
+            f"{','.join(map(str, e['observed_codes']))} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {', '.join(FLAG_INFO[f]['label'] for f in e['flags'])} |"
         )
     if rep["drift"]:
         lines += ["", "## Spec drift", ""]
@@ -184,6 +203,10 @@ def render_markdown(rep: dict) -> str:
                              f"{ex.get('hypothesis', '')} Fix: {ex.get('fix', 'n/a')}")
             else:
                 lines.append(f"- Explanation for `{cid}`: {ex}")
+    present = [f for f in FLAG_INFO if any(f in e["flags"] for e in rep["endpoints"])]
+    if present:
+        lines += ["", "## What the labels mean", ""]
+        lines += [f"- **{FLAG_INFO[f]['label']}**: {FLAG_INFO[f]['help']}" for f in present]
     return "\n".join(lines) + "\n"
 
 
