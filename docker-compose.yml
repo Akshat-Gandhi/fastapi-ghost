@@ -24,6 +24,7 @@ services:
       GHOST_DATABASE_URL: postgresql+psycopg://ghost:${GHOST_DB_PASSWORD:-ghost}@db:5432/ghost
       GHOST_ALLOW_SIGNUP: ${GHOST_ALLOW_SIGNUP:-1}
       GHOST_SECRET_KEY: ${GHOST_SECRET_KEY:-}
+      GHOST_ADMIN_PASSWORD: ${GHOST_ADMIN_PASSWORD:-}
     volumes:
       - ghost_data:/data
     ports:

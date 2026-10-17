@@ -37,6 +37,7 @@
 <header>
   <a class="brand" href="/">fastapi-ghost</a>
   {% if user %}<span class="muted">{{ user.email }}
+    {% if not user.must_change_password %}<a href="/change-password">Change password</a>{% endif %}
     <form class="inline" method="post" action="/logout"><button class="link" type="submit">Sign out</button></form></span>{% endif %}
 </header>
 <main>{% block content %}{% endblock %}</main>

@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..report import FLAG_INFO, OUTCOME_LABELS
-from .db import Project, Run, User, UserSession, make_session_factory, utcnow
+from .db import Project, Run, User, UserSession, ensure_admin, make_session_factory, utcnow
 from .runner import execute_run
 from .security import (
     decrypt_headers, encrypt_headers, hash_password, hash_token,
@@ -21,6 +21,7 @@ from .security import (
 )
 
 COOKIE = "ghost_session"
+WEAK_PASSWORDS = {"admin", "password", "12345678", "password1"}
 SESSION_DAYS = 14
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["FLAGS"] = FLAG_INFO
@@ -31,6 +32,7 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
     factory = factory or make_session_factory()
     app = FastAPI(title="fastapi-ghost", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.factory = factory
+    ensure_admin(factory)
 
     def get_db():
         with factory() as db:
@@ -45,9 +47,14 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
             return None
         return db.get(User, sess.user_id)
 
-    def require_user(user: User | None = Depends(current_user)) -> User:
+    def require_user_any(user: User | None = Depends(current_user)) -> User:
         if not user:
             raise HTTPException(status_code=303, headers={"Location": "/login"})
+        return user
+
+    def require_user(user: User = Depends(require_user_any)) -> User:
+        if user.must_change_password:
+            raise HTTPException(status_code=303, headers={"Location": "/change-password"})
         return user
 
     def own_project(project_id: int, db: Session, user: User) -> Project:
@@ -64,7 +71,7 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         token, hashed = new_session_token()
         db.add(UserSession(token_hash=hashed, user_id=user.id, expires_at=utcnow() + timedelta(days=SESSION_DAYS)))
         db.commit()
-        resp = RedirectResponse("/projects", status_code=303)
+        resp = RedirectResponse("/change-password" if user.must_change_password else "/projects", status_code=303)
         resp.set_cookie(COOKIE, token, httponly=True, samesite="lax", max_age=SESSION_DAYS * 86400)
         return resp
 
@@ -85,8 +92,11 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         user = db.scalar(select(User).where(User.email == email.strip().lower()))
         if not user or not verify_password(password, user.password_hash):
             return templates.TemplateResponse(
-                request, "login.html", {"user": None, "error": "Wrong email or password."}, status_code=401
+                request, "login.html", {"user": None, "error": "Wrong email/username or password."}, status_code=401
             )
+        if password in WEAK_PASSWORDS and not user.must_change_password:
+            user.must_change_password = True  # an account still on a default password must change it
+            db.commit()
         return start_session(db, user)
 
     @app.get("/register")
@@ -125,6 +135,42 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         resp = RedirectResponse("/login", status_code=303)
         resp.delete_cookie(COOKIE)
         return resp
+
+    @app.get("/change-password")
+    def change_password_page(request: Request, user: User = Depends(require_user_any)):
+        return templates.TemplateResponse(request, "change_password.html", {"user": user, "error": None})
+
+    @app.post("/change-password")
+    def change_password(
+        request: Request,
+        request_user: User = Depends(require_user_any),
+        current_password: str = Form(...),
+        new_password: str = Form(...),
+        confirm_password: str = Form(...),
+        db: Session = Depends(get_db),
+    ):
+        user = db.get(User, request_user.id)
+        error = None
+        if not verify_password(current_password, user.password_hash):
+            error = "Current password is wrong."
+        elif new_password != confirm_password:
+            error = "The new passwords do not match."
+        elif len(new_password) < 8:
+            error = "New password must be at least 8 characters."
+        elif new_password in WEAK_PASSWORDS or new_password == current_password:
+            error = "Choose a password that is different from the current one and not a default."
+        if error:
+            return templates.TemplateResponse(
+                request, "change_password.html", {"user": user, "error": error}, status_code=400
+            )
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = False
+        keep = hash_token(request.cookies.get(COOKIE, ""))
+        for sess in db.scalars(select(UserSession).where(UserSession.user_id == user.id)).all():
+            if sess.token_hash != keep:
+                db.delete(sess)  # sign out every other session
+        db.commit()
+        return RedirectResponse("/projects", status_code=303)
 
     @app.get("/projects")
     def projects(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):

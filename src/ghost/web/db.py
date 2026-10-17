@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, create_engine, func, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -22,6 +22,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     projects: Mapped[list["Project"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
@@ -73,4 +74,29 @@ def make_session_factory(url: str | None = None) -> sessionmaker:
         kwargs["poolclass"] = StaticPool
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
+    _migrate(engine)
     return sessionmaker(engine, expire_on_commit=False)
+
+
+def _migrate(engine) -> None:
+    """create_all never alters existing tables, so add columns introduced after a database was created."""
+    if "must_change_password" not in {c["name"] for c in inspect(engine).get_columns("users")}:
+        default = "0" if engine.dialect.name == "sqlite" else "FALSE"
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT {default}"))
+
+
+def ensure_admin(factory: sessionmaker) -> bool:
+    """On a brand-new install (no users at all) create admin/admin and force a password change at first sign-in.
+
+    GHOST_ADMIN_PASSWORD sets a different initial password and skips the forced change.
+    Never runs when any user exists, so a default credential cannot appear on a live instance."""
+    from .security import hash_password
+
+    with factory() as db:
+        if db.scalar(select(func.count()).select_from(User)):
+            return False
+        chosen = os.environ.get("GHOST_ADMIN_PASSWORD")
+        db.add(User(email="admin", password_hash=hash_password(chosen or "admin"), must_change_password=not chosen))
+        db.commit()
+        return True
