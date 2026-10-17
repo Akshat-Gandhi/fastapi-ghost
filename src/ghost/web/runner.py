@@ -58,7 +58,7 @@ def execute_run(factory: sessionmaker, run_id: int) -> None:
                 allowed_hosts=[host] if project.allow_writes else [],
             )
             workspace.set_override(slug, cfg)
-            with httpx.Client(timeout=cfg.timeout_s) as client:
+            with httpx.Client(timeout=cfg.timeout_s, limits=workspace.CLIENT_LIMITS) as client:
                 run.results = {**run_pipeline(slug, client), "api": project.name}
             run.status = "done"
         except Exception as exc:  # report the failure on the run instead of losing it

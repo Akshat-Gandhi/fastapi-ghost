@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${1:?usage: $0 <api-slug>}"
-ghost bundles --api "$1"
+"${GHOST_BIN:-ghost}" bundles --api "$1"

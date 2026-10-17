@@ -95,6 +95,12 @@ def clear_override(api: str) -> None:
     _OVERRIDES.pop(api, None)
 
 
+# Servers (uvicorn) close idle keep-alive connections after 5 s. Reusing one just as it closes resets a write that
+# cannot be retried safely, so Ghost's own clients let go of idle connections sooner.
+import httpx as _httpx
+
+CLIENT_LIMITS = _httpx.Limits(keepalive_expiry=1.0)
+
 _SESSION_AUTH: dict[str, dict[str, str]] = {}  # api -> headers obtained by [login]; memory only, never on disk
 LOGIN_KEYS = {"path", "method", "as", "fields", "extra", "token_path", "header", "prefix"}
 

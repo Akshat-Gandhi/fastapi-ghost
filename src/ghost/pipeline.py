@@ -18,7 +18,7 @@ from .validate import run_validate
 def run_pipeline(api: str, client: httpx.Client | None = None) -> dict:
     cfg = workspace.load_config(api)
     own = client is None
-    client = client or httpx.Client(timeout=cfg.timeout_s)
+    client = client or httpx.Client(timeout=cfg.timeout_s, limits=workspace.CLIENT_LIMITS)
     try:
         snapshot_spec(api, client)
         run_scan(api)
