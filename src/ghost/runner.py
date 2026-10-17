@@ -249,17 +249,17 @@ def run_teardowns(ctx: RunContext, cfg: ApiConfig, client: httpx.Client, budget:
             for name, value in item["path_params"].items():
                 path = path.replace("{" + name + "}", quote(str(value), safe=""))
             headers = resolve_auth(cfg, td.get("auth", "none"))
-            params = resolve_auth_query(cfg, td.get("auth", "none")) or None
+            extra = {"params": q} if (q := resolve_auth_query(cfg, td.get("auth", "none"))) else {}
             try:
                 try:
-                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, params=params)
+                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, **extra)
                 except _STALE_CONNECTION:
                     # A teardown DELETE is idempotent, so (unlike case writes) one retry on a stale pooled
                     # connection is safe: a 404 on the retry is reported as `gone`.
                     if ep.method != "DELETE" or budget[0] <= 0:
                         raise
                     budget[0] -= 1
-                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, params=params)
+                    resp = client.request(ep.method, cfg.base_url + path, headers=headers, **extra)
                 rec["status"] = resp.status_code
                 rec["outcome"] = "ok" if resp.status_code < 300 else ("gone" if resp.status_code == 404 else "failed")
             except httpx.HTTPError as exc:
