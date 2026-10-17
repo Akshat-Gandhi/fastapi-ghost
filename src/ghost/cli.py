@@ -124,3 +124,59 @@ def validate(api: str = typer.Option(..., help="API name from `ghost init`.")) -
     from .validate import run_validate
     result = _guard(lambda: run_validate(api))
     typer.echo(f"Validation: {result['summary']}")
+
+
+@app.command(name="exec")
+def exec_(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S6: run validated cases against the live API."""
+    from .runner import run_all
+    results = _guard(lambda: run_all(api))
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+    typer.echo(f"Ran {len(results)} cases: {counts}")
+
+
+@app.command()
+def bundles(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S7 input: write an evidence bundle per failing case."""
+    from .explain import make_bundles
+    written = _guard(lambda: make_bundles(api))
+    typer.echo(f"Wrote {len(written)} evidence bundles")
+
+
+@app.command()
+def report(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S8: write report.json and report.md. Findings never change the exit code."""
+    from .report import write_report
+    rep = _guard(lambda: write_report(api))
+    s = rep["summary"]
+    typer.echo(f"Report: {s['endpoints']} endpoints, {s['with_findings']} with findings -> {workspace.api_dir(api)}/report.md")
+
+
+@app.command()
+def pipeline(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """Run S1..S8 with no agents (deterministic baseline). Always exits 0 on findings."""
+    from .contract import run_contract
+    from .explain import make_bundles
+    from .gen import run_gen
+    from .report import write_report
+    from .runner import run_all
+    from .scan import run_scan
+    from .validate import run_validate
+
+    def go():
+        cfg = workspace.load_config(api)
+        with httpx.Client(timeout=cfg.timeout_s) as client:
+            snapshot_spec(api, client)
+        run_scan(api)
+        run_contract(api)
+        run_gen(api)
+        run_validate(api)
+        run_all(api)
+        make_bundles(api)
+        return write_report(api)
+    rep = _guard(go)
+    s = rep["summary"]
+    typer.echo(f"{api}: {s['endpoints']} endpoints, {s['cases_run']} cases, {s['with_findings']} with findings")
+    typer.echo(f"Report: {workspace.api_dir(api)}/report.md")
