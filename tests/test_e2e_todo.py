@@ -98,3 +98,68 @@ def test_full_pipeline_on_todo_app(server, tmp_path, monkeypatch):
     runner.invoke(cli, ["discover", "--api", "todo"])
     runner.invoke(cli, ["contract", "--api", "todo"])
     assert json.loads((workspace.api_dir("todo") / "drift.json").read_text())["items"] == []
+
+
+def _setup_api(runner, port, writes=True):
+    url = f"http://127.0.0.1:{port}"
+    src = str(ROOT / "examples" / "todo_app")
+    args = ["init", "todo", "--url", url, "--source", src] + (["--writes"] if writes else [])
+    assert runner.invoke(cli, args).exit_code == 0
+    cfg = workspace.api_dir("todo") / "api.toml"
+    cfg.write_text(cfg.read_text().replace('# Authorization = "MY_API_TOKEN_HEADER_VALUE"', 'Authorization = "TODO_AUTH_HEADER"'))
+    return url
+
+
+def _outcomes(api="todo"):
+    rep = json.loads((workspace.api_dir(api) / "report.json").read_text())
+    return {c["case_id"]: (c["status"], c["outcome"]) for e in rep["endpoints"] for c in e["cases"]}, rep
+
+
+def test_pipeline_twice_on_same_server_gives_same_outcomes(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / ".ghost"))
+    monkeypatch.setenv("TODO_AUTH_HEADER", "Bearer e2e-secret-token")
+    runner = CliRunner()
+    url = _setup_api(runner, server)
+    auth = {"Authorization": "Bearer e2e-secret-token"}
+
+    def server_todos():
+        return httpx.get(f"{url}/todos", headers=auth).json()
+
+    seed = server_todos()
+    assert [t["id"] for t in seed] == [1]
+
+    runs = []
+    for _ in range(3):
+        out = runner.invoke(cli, ["pipeline", "--api", "todo"])
+        assert out.exit_code == 0, out.output
+        runs.append(_outcomes())
+        # Ghost cleaned up after itself: the server holds exactly its seed data again.
+        assert server_todos() == seed
+
+    first, rep = runs[0]
+    for later, _ in runs[1:]:
+        assert later == first  # same statuses and outcomes on every re-run
+    # Ghost's own writes cause no mismatches: the happy GET/PUT/DELETE use the id it created.
+    ids = {cid: v for cid, v in first.items()}
+    assert ids["post_todos.happy.1"] == (201, "expected")
+    assert ids["get_todos_todo_id.happy.1"] == (200, "expected")
+    assert ids["put_todos_todo_id.happy.1"] == (200, "expected")
+    assert ids["delete_todos_todo_id.happy.1"] == (204, "expected")
+    todo_cases = {cid: v for cid, v in first.items() if cid.split("_")[0] in ("post", "get", "put", "delete") and "todos" in cid}
+    assert todo_cases and not any(o == "mismatch" for _, o in todo_cases.values()), todo_cases
+    assert rep["state"]["teardown"] and not rep["state"]["teardown_problems"]
+    # seed id 1 survived (the old DELETE happy removed it)
+    assert httpx.get(f"{url}/todos/1", headers=auth).status_code == 200
+
+
+def test_reset_hook_is_an_http_call_and_respects_write_gate(server, tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / ".ghost"))
+    monkeypatch.setenv("TODO_AUTH_HEADER", "Bearer e2e-secret-token")
+    runner = CliRunner()
+    _setup_api(runner, server, writes=False)
+    cfg = workspace.api_dir("todo") / "api.toml"
+    cfg.write_text(cfg.read_text() + '\n[reset]\nmethod = "POST"\npath = "/calc/divide"\n')
+    assert runner.invoke(cli, ["pipeline", "--api", "todo"]).exit_code == 0
+    res = json.loads((workspace.api_dir("todo") / "results" / "results.json").read_text())
+    assert res["reset"]["outcome"] == "skipped" and res["reset"]["status"] is None  # writes not allowed: no call
+    assert res["teardown"] == []

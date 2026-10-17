@@ -9,6 +9,7 @@ from .contract import key_of
 from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .probe import _sample_value
 from .schema import deref, example_from_schema, mutate_invalid
+from .state import Chain, find_chains, uniquify
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 CATEGORIES = {"happy", "invalid_payload", "missing_auth", "bad_auth", "not_found", "conflict", "observe_5xx"}
@@ -44,25 +45,63 @@ def _case(op: str, n: dict, category: str, title: str, ep: Endpoint, request: di
     }
 
 
-def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False, public: bool = False) -> list[dict]:
+def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False, public: bool = False,
+                   chains: dict[str, Chain] | None = None) -> list[dict]:
     """has_auth: api.toml configures credentials. Many apps check auth without declaring it in OpenAPI,
-    so when credentials exist every case sends them by default."""
+    so when credentials exist every case sends them by default.
+    chains: item path -> Chain (see state.find_chains). With a chain, cases on the item path use the id that
+    the creating POST returned, and that POST deletes what it created afterwards."""
+    chains = chains or {}
     op, n = operation_id(ep), {}
+    example = entry.get("request_example")
+    auth = "valid" if (ep.secured or has_auth) else "none"
     base = {"path_params": _path_params(ep, spec), "query": _query(ep, spec), "headers": {},
-            "body": entry.get("request_example"), "auth": "valid" if (ep.secured or has_auth) else "none"}
+            "body": example, "auth": auth}
     expected_codes = [e["status"] for e in entry["expected"]]
     success = [c for c in expected_codes if 200 <= c < 300] or [200]
-    cases = [_case(op, n, "happy", "valid request returns success", ep, base, success)]
+
+    happy_req = dict(base)
+    if ep.method in ("POST", "PUT", "PATCH") and ep.body_schema is not None and example is not None:
+        happy_req["body"] = uniquify(example, ep.body_schema, spec)  # fresh values each run: no 409 on re-run
+    chain = chains.get(ep.path) if ep.method in ("GET", "PUT", "PATCH", "DELETE") else None
+    chained_params = {chain.param: "{{%s}}" % chain.capture} if chain else None
+    if chain:
+        happy_req["path_params"] = {**base["path_params"], **chained_params}
+    happy = _case(op, n, "happy", "valid request returns success", ep, happy_req, success)
+    if chain:
+        happy["setup"] = [chain.create_case_id]
+    creates = next((c for c in chains.values() if c.create_ep is ep), None) if ep.method == "POST" else None
+    if creates:
+        happy["captures"] = {creates.capture: creates.capture_path}
+        if creates.delete_ep is not None:
+            happy["teardown"] = {
+                "operation_id": operation_id(creates.delete_ep), "method": "DELETE", "path": creates.item_path,
+                "path_params": {creates.param: "{{%s}}" % creates.capture}, "destructive": True,
+                "auth": "valid" if (creates.delete_ep.secured or has_auth) else "none",
+            }
+    cases = []
+    if not (ep.method == "DELETE" and not chain):
+        # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
+        cases.append(happy)
+
+    def add(category: str, title: str, request: dict, status: list[int], chained: bool = True) -> None:
+        c = _case(op, n, category, title, ep, request, status)
+        if chain and chained:
+            c["request"] = {**request, "path_params": {**request["path_params"], **chained_params}}
+            c["setup"] = [chain.create_case_id]
+        elif ep.method == "DELETE" and request["auth"] != "valid" and not chain:
+            c["request"] = {**request, "path_params": _path_params(ep, spec, missing=True)}  # never hit real data
+        cases.append(c)
 
     if ep.body_schema is not None:
-        for desc, payload in mutate_invalid(ep.body_schema, entry.get("request_example"), spec):
-            cases.append(_case(op, n, "invalid_payload", desc, ep, {**base, "body": payload}, [422, 400]))
+        for desc, payload in mutate_invalid(ep.body_schema, example, spec):
+            add("invalid_payload", desc, {**base, "body": payload}, [422, 400])
     if ep.secured or (has_auth and not public):
-        cases.append(_case(op, n, "missing_auth", "no credentials", ep, {**base, "auth": "none"}, [401, 403]))
-        cases.append(_case(op, n, "bad_auth", "invalid credentials", ep, {**base, "auth": "bad"}, [401, 403]))
+        add("missing_auth", "no credentials", {**base, "auth": "none"}, [401, 403])
+        add("bad_auth", "invalid credentials", {**base, "auth": "bad"}, [401, 403])
     if 404 in expected_codes and any(p.location == "path" for p in ep.params):
-        cases.append(_case(op, n, "not_found", "unknown resource id", ep,
-                           {**base, "path_params": _path_params(ep, spec, missing=True)}, [404]))
+        add("not_found", "unknown resource id", {**base, "path_params": _path_params(ep, spec, missing=True)}, [404],
+            chained=False)
     return cases[:MAX_CASES_PER_ENDPOINT]
 
 
@@ -74,11 +113,17 @@ def run_gen(api: str) -> int:
     if not contract:
         raise FileNotFoundError(f"No contract for {api}. Run: ghost contract --api {api}")
     total = 0
+    chains: dict[str, Chain] = {}
+    if cfg.allow_writes and cfg.host_allowed():  # chains create data: only when writes are allowed
+        chains = {
+            path: ch for path, ch in find_chains(endpoints, spec, operation_id).items()
+            if not any(path.startswith(b) or ch.create_ep.path.startswith(b) for b in cfg.blocked_paths)
+        }
     for ep in endpoints:
         entry = contract.get(key_of(ep))
         if not entry:
             continue
-        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths)
+        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths, chains=chains)
         existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
         cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
         workspace.write_json(

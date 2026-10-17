@@ -9,7 +9,9 @@ Enforced in code by the runner, not by prompts. Agents and the main session must
 | Host | `allowed_hosts` | requests to other hosts refused |
 | Paths | `blocked_paths` | matching paths never requested |
 | Rate | `max_rps` | requests throttled |
-| Volume | per-run request cap | run stops at the cap |
+| Volume | per-run request cap | run stops at the cap (setup cases, teardown and reset count; requests are held back for pending teardowns) |
+| Reset hook | `[reset]` in `api.toml` | one HTTP call (method + path on `base_url`) before the cases; only with writes allowed, an allowed host and a non-blocked path; never a shell command |
+| Teardown | generated per creating case | deletes only ids Ghost captured; same write/host/blocked-path gates; failures reported (`results.json` `teardown`), never fail the run |
 
 ## Secrets
 - `api.toml` stores env var NAMES only. Tokens come from the environment at run time.
