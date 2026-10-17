@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Users · fastapi-ghost{% endblock %}
+{% block content %}
+<h2>Users</h2>
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if notice %}<div class="card" role="status">{{ notice }}</div>{% endif %}
+<div class="card table-wrap"><table>
+<thead><tr><th>User</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+<tbody>
+{% for u in users %}
+<tr>
+  <td class="code">{{ u.email }}</td>
+  <td>{{ "admin" if u.is_admin else "user" }}</td>
+  <td>{% if u.must_change_password %}must change password{% else %}active{% endif %}</td>
+  <td>
+    <form class="inline" method="post" action="/admin/users/{{ u.id }}/reset-password"><button class="link" type="submit">Reset password</button></form>
+    {% if u.id != user.id %}<form class="inline" method="post" action="/admin/users/{{ u.id }}/delete"><button class="link" type="submit">Delete</button></form>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+<div class="card">
+  <h3>Add a user</h3>
+  <form method="post" action="/admin/users">
+    <label for="identifier">Email or username</label><input id="identifier" name="identifier" type="text" required>
+    <label for="password">Initial password (8+ characters)</label><input id="password" name="password" type="password" minlength="8" autocomplete="new-password" required>
+    <label><input type="checkbox" name="make_admin" value="1" style="width:auto"> Make this user an admin</label>
+    <p><button type="submit">Add user</button></p>
+  </form>
+  <p class="muted">The person must choose their own password the first time they sign in.</p>
+</div>
+{% endblock %}

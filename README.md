@@ -13,7 +13,7 @@ docker compose up -d
 open http://127.0.0.1:8080     # sign in as admin / admin, choose a new password, enroll a project, press Run
 ```
 
-On a brand-new install the only account is `admin` / `admin`, and you are sent to a change-password page before you can do anything else (any account still using a known default password is forced to change it too). Set `GHOST_ADMIN_PASSWORD` in `.env` to choose the initial password instead. The default account is created only when there are no users at all, so it never appears on an existing instance.
+On a brand-new install the only account is `admin` / `admin`, and you are sent to a change-password page before you can do anything else (any account still using a known default password is forced to change it too). Admins get a **Users** page to add users and reset a forgotten password (the person must choose a new one at next sign-in); if everyone is locked out, run `docker compose exec app ghost reset-password admin`. There is no email, so there is no emailed reset link. Set `GHOST_ADMIN_PASSWORD` in `.env` to choose the initial password instead. The default account is created only when there are no users at all, so it never appears on an existing instance.
 
 Everything persists in Docker volumes (`ghost_pgdata` for Postgres, `ghost_data` for per-project workspaces and the encryption key). The UI is bound to `127.0.0.1` only.
 
@@ -101,7 +101,8 @@ Agents never call your API; they use `ghost` verbs. Regenerating cases keeps age
 
 ## Known limits
 
-- Status codes are inferred from the spec and from direct `raise HTTPException(...)` in route functions. Errors raised in helper/service layers are not mapped to endpoints yet, and custom exception handlers are not followed.
+- Status codes come from the spec and from a static scan of the source. The scan builds a project-wide call graph and follows it from each route (depth limit 6): helper/service/crud calls, `module.func()` and aliased imports, `self.method()` and module-level instances, and `Depends()`/`Security()` dependencies (parameters, `Annotated` aliases, and router/app/`include_router` `dependencies=`). Each raise site records how it was reached (`via`) and a `confidence`: `direct`, `via_call`, `via_dependency` or `ambiguous` (several candidates, all kept). Custom exceptions count when an `exception_handler`/`add_exception_handler` with a literal status maps them, or when they subclass `HTTPException` with a fixed status.
+- Still not resolved, on purpose (no edge is invented): calls through parameters, local variables, `getattr`, dicts or callbacks; calls on objects whose class is not obvious from `x = Cls()` / `self.x = Cls()`; functions passed to `run_in_threadpool`/`to_thread`; middleware; mounted sub-apps; routers whose prefix is not a string literal (the path then falls back to suffix matching, which can attach a site to several endpoints); handlers whose status is not a single literal (status stays unknown); and statuses raised by libraries. Errors raised in code the scan cannot reach are simply not linked to an endpoint.
 - Baseline cases cover happy path, invalid payload (one fault each), missing/bad auth, and 404. Conflicts (409), 403 by role, 429 and business rules need state or knowledge of the app: that is what `case-writer` is for.
 - Only JSON bodies; no multipart/file uploads or OAuth flows yet. Auth is static headers.
 - Endpoints that are intentionally public get a `CASE_FAILED` on the "no credentials" case unless listed in `public_paths`.

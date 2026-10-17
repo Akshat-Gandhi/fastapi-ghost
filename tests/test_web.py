@@ -202,3 +202,93 @@ def test_existing_database_gets_the_new_column(tmp_path):
         from ghost.web.db import User
         assert db.query(User).filter_by(email="old@x.io").one().must_change_password is False
         assert db.query(User).filter_by(email="admin").count() == 0  # existing instance: no default account appears
+
+
+# --- user management, forgot password -----------------------------------------
+
+def admin_client(app, pw="a-much-better-pass"):
+    c = TestClient(app, follow_redirects=False)
+    login(c)
+    c.post("/change-password", data={"current_password": "admin", "new_password": pw, "confirm_password": pw})
+    return c
+
+
+def test_admin_creates_user_who_must_change_password(client):
+    adm = admin_client(client.app)
+    r = adm.post("/admin/users", data={"identifier": "Sam", "password": "initial-pass-1"})
+    assert r.status_code == 200 and "Created sam" in r.text
+    sam = TestClient(client.app, follow_redirects=False)
+    assert login(sam, "sam", "initial-pass-1").headers["location"] == "/change-password"
+    assert adm.post("/admin/users", data={"identifier": "sam", "password": "another-pass-1"}).status_code == 400
+    assert adm.post("/admin/users", data={"identifier": "bad name", "password": "another-pass-1"}).status_code == 400
+    assert adm.post("/admin/users", data={"identifier": "x", "password": "admin"}).status_code == 400
+
+
+def test_non_admins_cannot_reach_user_management(client):
+    adm = admin_client(client.app)
+    adm.post("/admin/users", data={"identifier": "sam", "password": "initial-pass-1"})
+    sam = TestClient(client.app, follow_redirects=False)
+    login(sam, "sam", "initial-pass-1")
+    sam.post("/change-password", data={"current_password": "initial-pass-1", "new_password": "sams-new-pass-9", "confirm_password": "sams-new-pass-9"})
+    assert sam.get("/admin/users").status_code == 404
+    assert sam.post("/admin/users", data={"identifier": "evil", "password": "initial-pass-1"}).status_code == 404
+    assert sam.post("/admin/users/1/reset-password").status_code == 404
+    assert TestClient(client.app, follow_redirects=False).get("/admin/users").headers["location"] == "/login"
+
+
+def test_forgot_password_admin_reset(client):
+    adm = admin_client(client.app)
+    adm.post("/admin/users", data={"identifier": "sam", "password": "initial-pass-1"})
+    sam = TestClient(client.app, follow_redirects=False)
+    login(sam, "sam", "initial-pass-1")
+    sam.post("/change-password", data={"current_password": "initial-pass-1", "new_password": "sams-new-pass-9", "confirm_password": "sams-new-pass-9"})
+    assert sam.get("/projects").status_code == 200
+    sam_id = 2
+    page = adm.post(f"/admin/users/{sam_id}/reset-password")
+    temp = page.text.split("Temporary password for sam: ")[1].split(" ")[0].strip()
+    assert sam.get("/projects").headers["location"] == "/login"          # old session is dead
+    assert login(TestClient(client.app, follow_redirects=False), "sam", "sams-new-pass-9").status_code == 401
+    forced = TestClient(client.app, follow_redirects=False)
+    assert login(forced, "sam", temp).headers["location"] == "/change-password"
+
+
+def test_cannot_delete_self_or_last_admin(client):
+    adm = admin_client(client.app)
+    assert adm.post("/admin/users/1/delete").status_code == 400
+    adm.post("/admin/users", data={"identifier": "sam", "password": "initial-pass-1"})
+    assert adm.post("/admin/users/2/delete").status_code == 200
+    assert "sam" not in adm.get("/admin/users").text
+
+
+def test_cli_reset_password(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from ghost.cli import app as cli
+    url = f"sqlite:///{tmp_path}/cli.db"
+    monkeypatch.setenv("GHOST_DATABASE_URL", url)
+    monkeypatch.setenv("GHOST_DATA_DIR", str(tmp_path))
+    app = create_app(make_session_factory(url))
+    c = TestClient(app, follow_redirects=False)
+    login(c)
+    c.post("/change-password", data={"current_password": "admin", "new_password": "a-much-better-pass", "confirm_password": "a-much-better-pass"})
+    out = CliRunner().invoke(cli, ["reset-password", "admin"])
+    assert out.exit_code == 0 and "Temporary password for admin:" in out.output
+    temp = out.output.split("Temporary password for admin: ")[1].split()[0]
+    assert c.get("/projects").headers["location"] == "/login"
+    fresh = TestClient(app, follow_redirects=False)
+    assert login(fresh, "admin", "a-much-better-pass").status_code == 401
+    assert login(fresh, "admin", temp).headers["location"] == "/change-password"
+    assert CliRunner().invoke(cli, ["reset-password", "nobody"]).exit_code == 2
+    assert CliRunner().invoke(cli, ["reset-password", "admin", "--password", "short"]).exit_code == 2
+
+
+def test_old_instance_first_user_becomes_admin(tmp_path):
+    import sqlalchemy as sa
+    url = f"sqlite:///{tmp_path}/old2.db"
+    eng = sa.create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE users (id INTEGER PRIMARY KEY, email VARCHAR(255) UNIQUE, password_hash VARCHAR(255), created_at DATETIME)"))
+        conn.execute(sa.text("INSERT INTO users (email, password_hash) VALUES ('first@x.io', 'x'), ('second@x.io', 'x')"))
+    from ghost.web.db import User
+    with make_session_factory(url)() as db:
+        assert db.query(User).filter_by(email="first@x.io").one().is_admin is True
+        assert db.query(User).filter_by(email="second@x.io").one().is_admin is False
