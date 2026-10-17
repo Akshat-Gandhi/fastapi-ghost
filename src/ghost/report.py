@@ -107,7 +107,7 @@ def write_json(results: list[ProbeResult], path: Path) -> None:
 # --- per-API report (S8) -----------------------------------------------------
 
 from . import workspace
-from .contract import key_of
+from .contract import key_of, statuses
 from .discover import load_endpoints, operation_id
 from .runner import latency_stats
 
@@ -132,9 +132,9 @@ def build_report(api: str) -> dict:
         mine = [r for r in results if r["operation_id"] == operation_id(ep)]
         expected = entry.get("expected", [])
         # "Declared" means in the OpenAPI docs. Statuses only found in the source are listed apart.
-        in_docs = {e["status"] for e in expected if e.get("source") == "spec"}
-        declared = sorted(in_docs or {e["status"] for e in expected})
-        code_only = sorted({e["status"] for e in expected} - set(declared)) if in_docs else []
+        in_docs = set(statuses([e for e in expected if e.get("source") == "spec"]))
+        declared = sorted(in_docs or set(statuses(expected)))
+        code_only = sorted(set(statuses(expected)) - set(declared)) if in_docs else []
         observed = sorted({s for r in mine for s in r["statuses"] if s is not None})
         timings = [t for r in mine if r["category"] == "happy" for t in r["timings_ms"]]
         lat = latency_stats(timings)
@@ -154,7 +154,7 @@ def build_report(api: str) -> dict:
             flags.append("DRIFT")
         if any(r["outcome"] in ("mismatch", "error") for r in mine):
             flags.append("CASE_FAILED")
-        raise_sites = {e["status"]: e for e in expected if e.get("raise_site")}
+        raise_sites = {e["status"]: e for e in expected if e.get("raise_site") and isinstance(e["status"], int)}
         error_responses = []
         for r in mine:
             if r["status"] is not None and r["status"] >= 400:

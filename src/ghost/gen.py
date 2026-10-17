@@ -6,7 +6,7 @@ import zlib
 from typing import Any
 
 from . import workspace
-from .contract import key_of
+from .contract import key_of, statuses
 from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .probe import _sample_value
 from .schema import deref, example_from_schema, mutate_invalid
@@ -77,7 +77,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
     auth = "valid" if (ep.secured or has_auth) else "none"
     base = {"path_params": _path_params(ep, spec), "query": _query(ep, spec), "headers": {},
             "body": example, "auth": auth}
-    expected_codes = [e["status"] for e in entry["expected"]]
+    expected_codes = statuses(entry["expected"])
     success = [c for c in expected_codes if 200 <= c < 300] or [200]
 
     happy_req = dict(base)
@@ -101,7 +101,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
             }
     cases = []
     # PUT/PATCH/DELETE on "/me" would change the very account Ghost signs in with, so later requests would fail.
-    self_edit = has_auth and ep.method in ("PUT", "PATCH", "DELETE") and ep.path.rstrip("/").endswith("/me")
+    self_edit = has_auth and ep.method in ("PUT", "PATCH", "DELETE") and ep.path.rstrip("/").endswith(("/me", "/user"))
     if not self_edit and not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
         # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
         cases.append(happy)
@@ -158,7 +158,15 @@ def run_gen(api: str) -> int:
                     c["title"] = "login with made-up credentials is refused (or accepted)"
                     c["expect"]["status"] = sorted({*c["expect"]["status"], 400, 401, 403, 422})
         existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
-        cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
+        taken = {c["id"] for c in cases}
+        for c in (c for c in existing if c.get("origin") == "agent"):  # never discard the writer agent's work
+            if c["id"] in taken:  # an agent case that reuses a baseline id gets its own: ids must be unique
+                base, n = c["id"].rsplit(".", 1)[0], 1
+                while f"{base}.a{n}" in taken:
+                    n += 1
+                c = {**c, "id": f"{base}.a{n}"}
+            taken.add(c["id"])
+            cases.append(c)
         workspace.write_json(
             api, f"cases/{operation_id(ep)}.json",
             {"operation_id": operation_id(ep), "method": ep.method, "path": ep.path, "cases": cases},

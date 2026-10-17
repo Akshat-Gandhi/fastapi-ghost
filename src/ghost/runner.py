@@ -40,6 +40,7 @@ class RunContext:
     nonce: str = field(default_factory=new_nonce)
     values: dict[str, Any] = field(default_factory=dict)
     teardowns: list[dict] = field(default_factory=list)
+    by_case: dict[str, dict[str, Any]] = field(default_factory=dict)  # what each case captured, by case id
 
 
 def build_request(case: dict, ep: Endpoint, cfg: ApiConfig, ctx: RunContext | None = None) -> dict:
@@ -210,6 +211,7 @@ def _record_state(case: dict, resp: httpx.Response, ctx: RunContext) -> None:
             value = extract(raw, path)
             if value is not None:
                 ctx.values[name] = value
+                ctx.by_case.setdefault(case["id"], {})[name] = value
     td = case.get("teardown")
     if td and names_in(td) <= (set(ctx.values) | {"nonce"}):
         # Snapshot now: a later case may capture a different value under the same name.
@@ -342,6 +344,8 @@ def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
         for sid in case.get("setup") or []:
             if sid in runnable:
                 execute(runnable[sid])
+        for sid in case.get("setup") or []:  # several cases capture `slug`: use the one this case's setup made
+            ctx.values.update(ctx.by_case.get(sid, {}))
         results.append(run_case(case, ep, cfg, client, budget, ctx))
 
     reset_result, teardown_results = None, []

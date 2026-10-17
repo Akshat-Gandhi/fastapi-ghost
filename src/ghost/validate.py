@@ -189,6 +189,10 @@ def run_validate(api: str) -> dict:
             if ep is None:
                 verdicts[case["id"]] = {"verdict": "drop", "problems": ["unknown_endpoint"], "warnings": []}
                 continue
+            if case["id"] in verdicts:  # two cases with one id would silently hide each other
+                verdicts[case["id"]]["problems"].append("duplicate_id")
+                verdicts[case["id"]]["verdict"] = "fix" if verdicts[case["id"]]["verdict"] == "ok" else verdicts[case["id"]]["verdict"]
+                continue
             problems, warnings = validate_case(case, ep, cfg, spec)
             problems += validate_state(case, ep, cfg, index, by_key)
             fingerprint = json.dumps([ep.method, ep.path, case["request"], case.get("expect")], sort_keys=True, default=str)
