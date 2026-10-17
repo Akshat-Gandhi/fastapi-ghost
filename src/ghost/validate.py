@@ -17,13 +17,14 @@ from .state import BUILTIN, CAPTURE_NAME, names_in, sample_nonce_only
 _EXPECT_RANGES = {
     "happy": lambda c: 200 <= c < 300,
     "invalid_payload": lambda c: c in (400, 422),
-    "missing_auth": lambda c: c in (401, 403),
-    "bad_auth": lambda c: c in (401, 403),
+    # Apps differ: bad credentials often answer 400 (or 423 when locked), a duplicate often answers 400.
+    "missing_auth": lambda c: c in (400, 401, 403, 422),
+    "bad_auth": lambda c: c in (400, 401, 403, 423),
     "not_found": lambda c: c == 404,
-    "conflict": lambda c: c == 409,
+    "conflict": lambda c: c in (400, 409),
 }
-_EXPECT_HINT = {"happy": "2xx", "invalid_payload": "400 or 422", "missing_auth": "401 or 403",
-                "bad_auth": "401 or 403", "not_found": "404", "conflict": "409"}
+_EXPECT_HINT = {"happy": "2xx", "invalid_payload": "400 or 422", "missing_auth": "400, 401, 403 or 422",
+                "bad_auth": "400, 401, 403 or 423", "not_found": "404", "conflict": "400 or 409"}
 _AUTH_FOR = {"missing_auth": "none", "bad_auth": "bad"}
 HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate", "teardown_not_allowed"}
 

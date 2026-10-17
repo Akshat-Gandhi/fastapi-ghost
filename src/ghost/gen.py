@@ -1,6 +1,7 @@
 """Baseline test case generation from the contract (S4). Cases are data (JSON), not code."""
 
 from __future__ import annotations
+import re
 import zlib
 
 from typing import Any
@@ -100,9 +101,11 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
                 "auth": "valid" if (creates.delete_ep.secured or has_auth) else "none",
             }
     cases = []
+    mutating = ep.method not in SAFE_METHODS
+    seeded = mutating and not chain and (_carries_seed_id(base["query"]) or _carries_seed_id(example))
     # PUT/PATCH/DELETE on "/me" would change the very account Ghost signs in with, so later requests would fail.
     self_edit = has_auth and ep.method in ("PUT", "PATCH", "DELETE") and ep.path.rstrip("/").endswith(("/me", "/user"))
-    if not self_edit and not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
+    if not self_edit and not seeded and not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
         # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
         cases.append(happy)
 
@@ -113,6 +116,10 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
             c["setup"] = [chain.create_case_id]
         elif ep.method == "DELETE" and request["auth"] != "valid" and not chain:
             c["request"] = {**request, "path_params": _path_params(ep, spec, missing=True)}  # never hit real data
+        if mutating and not chain and category != "happy":
+            # a request that should be refused must not point at a real record in case the refusal fails open
+            c["request"] = {**c["request"], "query": _unseeded(c["request"].get("query") or {}),
+                            "body": _unseeded(c["request"].get("body"))}
         cases.append(c)
 
     if ep.body_schema is not None:
@@ -125,6 +132,39 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
         add("not_found", "unknown resource id", {**base, "path_params": _path_params(ep, spec, missing=True)}, [404],
             chained=False)
     return cases[:MAX_CASES_PER_ENDPOINT]
+
+
+_ID_NAME = re.compile(r"(^|_)id$|Id$")
+
+
+def _is_seed_id(name: str, value) -> bool:
+    return bool(_ID_NAME.search(name)) and isinstance(value, int) and not isinstance(value, bool)
+
+
+def _carries_seed_id(obj) -> bool:
+    """An integer `id`/`*_id` in a query or body: the example value (1) points at a real, pre-existing record."""
+    if isinstance(obj, dict):
+        return any(_is_seed_id(k, v) or _carries_seed_id(v) for k, v in obj.items())
+    if isinstance(obj, list):
+        return any(_carries_seed_id(v) for v in obj)
+    return False
+
+
+def _unseeded(obj):
+    """Copy of a query/body with every integer id swapped for one no record has."""
+    if isinstance(obj, dict):
+        return {k: (999999999 if _is_seed_id(k, v) else _unseeded(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_unseeded(v) for v in obj]
+    return obj
+
+
+def open_by_contract(entry: dict, contract: dict) -> bool:
+    """The contract (after the contract-keeper enriched it) marks some routes as needing auth and this one as
+    not: it is public. A contract where every route says `none` says nothing, so the default applies."""
+    if entry.get("auth") not in (None, "none"):
+        return False
+    return any(e.get("auth") not in (None, "none") for e in contract.values() if isinstance(e, dict))
 
 
 def open_by_spec(ep: Endpoint, endpoints: list[Endpoint]) -> bool:
@@ -151,7 +191,7 @@ def run_gen(api: str) -> int:
         entry = contract.get(key_of(ep))
         if not entry:
             continue
-        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths or open_by_spec(ep, endpoints), chains=chains)
+        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths or open_by_spec(ep, endpoints) or open_by_contract(entry, contract), chains=chains)
         if cfg.login and ep.path == cfg.login["path"]:
             for c in cases:  # Ghost never puts real credentials in a case; made-up ones are rightly refused
                 if c["category"] == "happy":
