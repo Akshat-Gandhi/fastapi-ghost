@@ -16,6 +16,25 @@ CATEGORIES = {"happy", "invalid_payload", "missing_auth", "bad_auth", "not_found
 MAX_CASES_PER_ENDPOINT = 12
 
 
+def _chain_for(ep: Endpoint, chains: dict[str, Chain]) -> Chain | None:
+    """The chain whose created record this endpoint addresses: the item path itself, or a sub-resource of it
+    (`/articles/{slug}/comments`) which only needs the parent's id."""
+    if ep.method == "POST" and ep.path in chains:
+        return None  # that is the creating call
+    if ep.path in chains:
+        return chains[ep.path] if ep.method in ("GET", "PUT", "PATCH", "DELETE") else None
+    parents = [p for p in chains if ep.path.startswith(p + "/")]
+    return chains[max(parents, key=len)] if parents else None
+
+
+def _missing_id(schema: dict) -> Any:
+    """An id of the right type that no record has, so the answer is 404 rather than a validation error."""
+    if schema.get("type") in ("integer", "number"):
+        return 999999999
+    return {"uuid": "00000000-0000-4000-8000-00000000dead", "email": "ghost-missing@example.com",
+            "date": "1999-01-01", "date-time": "1999-01-01T00:00:00Z"}.get(schema.get("format"), "ghost-missing-id")
+
+
 def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, Any]:
     out = {}
     for p in ep.params:
@@ -23,7 +42,7 @@ def _path_params(ep: Endpoint, spec: dict, missing: bool = False) -> dict[str, A
             continue
         schema = deref(p.schema, spec)
         if missing:
-            out[p.name] = 999999999 if schema.get("type") in ("integer", "number") else "ghost-missing-id"
+            out[p.name] = _missing_id(schema)
         else:
             out[p.name] = example_from_schema(schema, spec) if schema else _sample_value(p.schema)
     return out
@@ -63,7 +82,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
     happy_req = dict(base)
     if ep.method in ("POST", "PUT", "PATCH") and ep.body_schema is not None and example is not None:
         happy_req["body"] = uniquify(example, ep.body_schema, spec)  # fresh values each run: no 409 on re-run
-    chain = chains.get(ep.path) if ep.method in ("GET", "PUT", "PATCH", "DELETE") else None
+    chain = _chain_for(ep, chains)
     chained_params = {chain.param: "{{%s}}" % chain.capture} if chain else None
     if chain:
         happy_req["path_params"] = {**base["path_params"], **chained_params}
@@ -80,7 +99,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
                 "auth": "valid" if (creates.delete_ep.secured or has_auth) else "none",
             }
     cases = []
-    if not (ep.method == "DELETE" and not chain):
+    if not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
         # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
         cases.append(happy)
 
@@ -124,6 +143,11 @@ def run_gen(api: str) -> int:
         if not entry:
             continue
         cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths, chains=chains)
+        if cfg.login and ep.path == cfg.login["path"]:
+            for c in cases:  # Ghost never puts real credentials in a case; made-up ones are rightly refused
+                if c["category"] == "happy":
+                    c["title"] = "login with made-up credentials is refused (or accepted)"
+                    c["expect"]["status"] = sorted({*c["expect"]["status"], 400, 401, 403, 422})
         existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
         cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
         workspace.write_json(

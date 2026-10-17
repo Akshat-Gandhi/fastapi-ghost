@@ -100,7 +100,8 @@ def test_run_and_report(env):
     rep = write_report("todo")
     ep = {f"{e['method']} {e['path']}": e for e in rep["endpoints"]}
     get = ep["GET /todos/{todo_id}"]
-    assert 404 in get["observed_codes"] and "UNDECLARED" in get["flags"]  # 401 is observed but not declared
+    assert 404 in get["observed_codes"] and 401 in get["observed_codes"]
+    assert "UNDECLARED" not in get["flags"]  # a 401 that a login test expected is not a docs surprise
     err = next(e for e in get["error_responses"] if e["status"] == 404)
     assert err["body"] == {"detail": "Todo not found"}
     assert err["internal_raise_site"] == "app.py:5"

@@ -84,6 +84,8 @@ def example_from_schema(schema: dict, spec: dict, depth: int = 0) -> Any:
         if schema.get("format") in _FORMATS:
             return _FORMATS[schema["format"]]
         text = "ghost"
+        if schema.get("pattern"):
+            text = _for_pattern(schema["pattern"], text)
         lo, hi = schema.get("minLength"), schema.get("maxLength")
         if lo and len(text) < lo:
             text = (text * (lo // len(text) + 1))[:lo]
@@ -91,6 +93,24 @@ def example_from_schema(schema: dict, spec: dict, depth: int = 0) -> Any:
             text = text[:hi]
         return text
     return None
+
+
+def _for_pattern(pattern: str, default: str) -> str:
+    """A string that matches a `pattern`: the literal inside ^...$ (or its first alternative), else a few guesses."""
+    import re
+
+    core = pattern[1:] if pattern.startswith("^") else pattern
+    core = core[:-1] if core.endswith("$") else core
+    core = core[1:-1] if core.startswith("(") and core.endswith(")") and core.count("(") == 1 else core
+    literal = core.split("|")[0]
+    guesses = [literal, default, "ghost1", "Ghost123!", "123456", "abc-123", "2020-01-01", "ghost@example.com"]
+    for guess in guesses:
+        try:
+            if re.search(pattern, guess):
+                return guess
+        except re.error:
+            return default
+    return default
 
 
 def _clamp(schema: dict, default, cast):

@@ -13,7 +13,8 @@ from .probe import ProbeResult
 SLOW_MS = 500.0
 
 OUTCOME_LABELS = {"expected": "as expected", "mismatch": "unexpected response", "5xx": "server error",
-                  "flaky": "inconsistent", "error": "could not connect"}
+                  "flaky": "inconsistent", "error": "could not connect", "skipped": "not sent",
+                  "open": "open to everyone", "inconclusive": "inconclusive"}
 
 # Stable codes live in report.json; people see these labels. `bad` = needs attention, `warn` = worth a look.
 FLAG_INFO = {
@@ -141,7 +142,10 @@ def build_report(api: str) -> dict:
             flags.append("FLAKY")
         if any(s >= 500 for s in observed):
             flags.append("5XX")
-        if any(s not in declared for s in observed):
+        # A 401/403 that a login test provoked and expected is not a documentation surprise.
+        auth_only = {r["status"] for r in mine if r["category"] in ("missing_auth", "bad_auth") and r["status"] in (401, 403)}
+        other = {s for r in mine if r["category"] not in ("missing_auth", "bad_auth") for s in r["statuses"] if s is not None}
+        if any(s not in declared and (s in other or s not in auth_only) for s in observed):
             flags.append("UNDECLARED")
         if key in drifted:
             flags.append("DRIFT")
@@ -157,7 +161,18 @@ def build_report(api: str) -> dict:
                     "internal_raise_via": (raise_sites.get(r["status"]) or {}).get("raise_via") or [],
                     "internal_raise_confidence": (raise_sites.get(r["status"]) or {}).get("raise_confidence"),
                 })
+        not_tested = None
+        if not mine:
+            safe = ep.method in ("GET", "HEAD", "OPTIONS")
+            if any(ep.path.startswith(b) for b in cfg.blocked_paths):
+                not_tested = "in blocked_paths"
+            elif not safe and not (cfg.allow_writes and cfg.host_allowed()):
+                not_tested = "changes data and writes are off"
+            else:
+                not_tested = "no test case was valid for it"
         endpoints.append({
+            "not_tested": not_tested,
+            "declared_not_seen": [c for c in declared if c not in observed] if mine else [],
             "method": ep.method, "path": ep.path, "operation_id": operation_id(ep),
             "declared_codes": declared, "observed_codes": observed, "flags": flags, "latency_ms": lat,
             "cases": [{k: r[k] for k in ("case_id", "category", "title", "expected", "status", "outcome")} for r in mine],
@@ -206,13 +221,17 @@ def render_markdown(rep: dict) -> str:
         p95 = e["latency_ms"]["p95"]
         lines.append(
             f"| `{e['method']} {e['path']}` | {','.join(map(str, e['declared_codes']))} | "
-            f"{','.join(map(str, e['observed_codes']))} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {', '.join(FLAG_INFO[f]['label'] for f in e['flags'])} |"
+            f"{','.join(map(str, e['observed_codes'])) or ('not tested: ' + e['not_tested'] if e.get('not_tested') else '')} | {f'{p95:.0f}ms' if p95 is not None else '-'} | {', '.join(FLAG_INFO[f]['label'] for f in e['flags'])} |"
         )
     if rep["drift"]:
         lines += ["", "## Spec drift", ""]
         lines += [f"- **{d['severity']}** `{d['where']}`: {d['detail']}" for d in rep["drift"]]
     for e in rep["endpoints"]:
         lines += ["", f"## `{e['method']} {e['path']}`", ""]
+        if e.get("not_tested"):
+            lines.append(f"Not tested: {e['not_tested']}.")
+        if e.get("declared_not_seen"):
+            lines.append(f"In the docs but never seen in this run: {', '.join(map(str, e['declared_not_seen']))}.")
         for c in e["cases"]:
             lines.append(f"- [{c['outcome']}] {c['category']}: {c['title']} (expected {c['expected']}, got {c['status']})")
         if e["error_responses"]:
@@ -220,7 +239,7 @@ def render_markdown(rep: dict) -> str:
             for er in e["error_responses"]:
                 via = " via " + " -> ".join(er.get("internal_raise_via") or []) if er.get("internal_raise_via") else ""
                 site = f" (raised at `{er['internal_raise_site']}`{via})" if er["internal_raise_site"] else ""
-                lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'])[:300]}`")
+                lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'], ensure_ascii=False)[:300]}`")
         for cid, ex in e["explanations"].items():
             if isinstance(ex, dict):
                 where = f" at `{ex['location']}`" if ex.get("location") else ""
@@ -242,7 +261,7 @@ def write_report(api: str) -> dict:
     rep = build_report(api)
     workspace.write_json(api, "report.json", rep)
     md = workspace.api_dir(api) / "report.md"
-    md.write_text(render_markdown(rep))
+    md.write_text(render_markdown(rep), encoding="utf-8")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     archive = workspace.api_dir(api) / "runs" / stamp
     archive.mkdir(parents=True, exist_ok=True)

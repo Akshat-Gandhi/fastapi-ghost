@@ -190,6 +190,23 @@ def _success_props(ep: Endpoint, spec: dict) -> dict:
     return {}
 
 
+def _id_field(props: dict, param: str, spec: dict) -> str | None:
+    """Dotted path of the new record's id in the create response: `id`, or `article.slug` for APIs that wrap
+    the record in a single envelope key."""
+    wanted = (param, "id", "uuid", "pk", "slug")
+    direct = next((c for c in wanted if c in props), None)
+    if direct:
+        return direct
+    wrappers = [k for k, v in props.items() if deref(v, spec).get("type") == "object" or "properties" in deref(v, spec)]
+    if len(wrappers) == 1:
+        inner = deref(props[wrappers[0]], spec)
+        if "allOf" in inner:
+            inner = _merge_all_of(inner, spec)
+        found = next((c for c in wanted if c in inner.get("properties", {})), None)
+        return f"{wrappers[0]}.{found}" if found else None
+    return None
+
+
 def find_chains(endpoints: list[Endpoint], spec: dict, op_id) -> dict[str, Chain]:
     """item path -> Chain, for every `POST /things` (no params) that creates something addressable at
     `/things/{param}`. The id must be visible in the documented success response, otherwise nothing is chained."""
@@ -204,7 +221,7 @@ def find_chains(endpoints: list[Endpoint], spec: dict, op_id) -> dict[str, Chain
                 continue
             param = m.group(1)
             props = _success_props(post, spec)
-            field = next((c for c in (param, "id", "uuid", "pk") if c in props), None)
+            field = _id_field(props, param, spec)
             if field is None:
                 continue
             delete = next((e for e in endpoints if e.method == "DELETE" and e.path == other.path), None)

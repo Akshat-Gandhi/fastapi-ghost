@@ -32,7 +32,7 @@ def api_dir(api: str) -> Path:
 
 def read_json(api: str, name: str, default: Any = None) -> Any:
     path = api_dir(api) / name
-    return json.loads(path.read_text()) if path.exists() else default
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
 
 
 def write_json(api: str, name: str, data: Any) -> Path:
@@ -40,7 +40,7 @@ def write_json(api: str, name: str, data: Any) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(data, dict):
         data = {"schema_version": SCHEMA_VERSION, **data}
-    path.write_text(json.dumps(data, indent=2, sort_keys=False))
+    path.write_text(json.dumps(data, indent=2, sort_keys=False, ensure_ascii=False), encoding="utf-8")
     return path
 
 
@@ -55,6 +55,7 @@ class ApiConfig:
     max_rps: float = 20.0
     max_requests: int = 2000
     auth: dict[str, str] = field(default_factory=dict)  # header name -> ENV VAR NAME
+    auth_query: dict[str, str] = field(default_factory=dict)  # query parameter name -> ENV VAR NAME (token in the URL)
     allowed_hosts: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
     public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
@@ -62,12 +63,17 @@ class ApiConfig:
     auth_values: dict[str, str] = field(default_factory=dict)
     # Optional HTTP call (method + path on base_url) made before the run to reset server state.
     reset: dict[str, str] | None = None
+    # Where the server publishes its OpenAPI document (FastAPI(openapi_url=...) or a mount prefix).
+    openapi_path: str = "/openapi.json"
+    # Sign-in call whose token is sent on every request (see parse_login).
+    login: dict[str, Any] | None = None
 
     def auth_names(self) -> list[str]:
-        return list(dict.fromkeys([*self.auth, *self.auth_values]))
+        login = [self.login["header"]] if self.login else []
+        return list(dict.fromkeys([*self.auth, *self.auth_values, *login]))
 
     def has_auth(self) -> bool:
-        return bool(self.auth or self.auth_values)
+        return bool(self.auth or self.auth_values or self.login or self.auth_query)
 
     def host_allowed(self) -> bool:
         """Writes only run against local hosts or hosts explicitly allowed."""
@@ -87,6 +93,35 @@ def set_override(api: str, cfg: ApiConfig) -> None:
 
 def clear_override(api: str) -> None:
     _OVERRIDES.pop(api, None)
+
+
+_SESSION_AUTH: dict[str, dict[str, str]] = {}  # api -> headers obtained by [login]; memory only, never on disk
+LOGIN_KEYS = {"path", "method", "as", "fields", "extra", "token_path", "header", "prefix"}
+
+
+def parse_login(raw: Any) -> dict[str, Any] | None:
+    """`[login]` in api.toml: sign in once per run and send the returned token. Credentials are env var NAMES."""
+    if not raw:
+        return None
+    if not isinstance(raw, dict) or set(raw) - LOGIN_KEYS:
+        raise ValueError(f"[login] only accepts {sorted(LOGIN_KEYS)}")
+    path = str(raw.get("path", ""))
+    if not path.startswith("/") or path.startswith("//") or "://" in path:
+        raise ValueError("[login] path must start with '/' and is relative to base_url")
+    kind = str(raw.get("as", "form"))
+    if kind not in ("form", "json"):
+        raise ValueError("[login] as must be 'form' or 'json'")
+    fields = raw.get("fields", {})
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("[login] fields = { field = \"ENV_VAR_NAME\" } is required (use env var names, not passwords)")
+    return {
+        "path": path, "method": str(raw.get("method", "POST")).upper(), "as": kind,
+        "fields": {str(k): str(v) for k, v in fields.items()},
+        "extra": dict(raw.get("extra", {})),  # fixed, non-secret form fields such as scope = "me items"
+        "token_path": str(raw.get("token_path", "access_token")),
+        "header": str(raw.get("header", "Authorization")),
+        "prefix": str(raw.get("prefix", "Bearer ")),
+    }
 
 
 RESET_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -115,6 +150,7 @@ def load_config(api: str) -> ApiConfig:
     data = tomllib.loads(path.read_text())
     src = data.get("source_root")
     return ApiConfig(
+        auth_values=dict(_SESSION_AUTH.get(api, {})),
         base_url=data["base_url"].rstrip("/"),
         source_root=Path(src) if src else None,
         allow_writes=bool(data.get("allow_writes", False)),
@@ -124,14 +160,19 @@ def load_config(api: str) -> ApiConfig:
         max_rps=float(data.get("max_rps", 20.0)),
         max_requests=int(data.get("max_requests", 2000)),
         auth=dict(data.get("auth", {})),
+        auth_query=dict(data.get("auth_query", {})),
         allowed_hosts=list(data.get("allowed_hosts", [])),
         blocked_paths=list(data.get("blocked_paths", [])),
         public_paths=list(data.get("public_paths", DEFAULT_PUBLIC)),
         reset=parse_reset(data.get("reset")),
+        openapi_path=str(data.get("openapi_path", "/openapi.json")),
+        login=parse_login(data.get("login")),
     )
 
 
-def write_default_config(api: str, url: str, source: str | None, writes: bool, force: bool = False) -> Path:
+def write_default_config(
+    api: str, url: str, source: str | None, writes: bool, force: bool = False, openapi_path: str = "/openapi.json"
+) -> Path:
     path = api_dir(api) / "api.toml"
     if path.exists() and not force:
         raise FileExistsError(f"{path} already exists (use --force to overwrite)")
@@ -140,6 +181,7 @@ def write_default_config(api: str, url: str, source: str | None, writes: bool, f
         f'base_url = "{url.rstrip("/")}"',
         f'source_root = "{source}"' if source else '# source_root = "./path/to/your/app"',
         f"allow_writes = {str(writes).lower()}",
+        f'openapi_path = "{openapi_path}"',
         "samples = 5",
         "slow_ms = 500",
         "max_rps = 20",
@@ -153,6 +195,17 @@ def write_default_config(api: str, url: str, source: str | None, writes: bool, f
         "# Auth: header name = NAME OF AN ENVIRONMENT VARIABLE holding the value. Never put tokens here.",
         "[auth]",
         '# Authorization = "MY_API_TOKEN_HEADER_VALUE"',
+        "",
+        "# Auth carried in the URL instead of a header (query parameter name = env var NAME):",
+        "# [auth_query]",
+        '# token = "MY_API_TOKEN"',
+        "",
+        "# Optional: sign in once per run and send the token on every request. Values are env var NAMES.",
+        "# [login]",
+        '# path = "/api/v1/login/access-token"',
+        '# as = "form"                 # or "json"',
+        '# fields = { username = "MY_API_USER", password = "MY_API_PASSWORD" }',
+        '# token_path = "access_token"  # dotted path in the JSON reply, e.g. "data.token"',
         "",
         "# Optional: an HTTP call made before a run (only when writes are allowed) to reset server state.",
         "# [reset]",
@@ -180,8 +233,18 @@ def resolve_auth(cfg: ApiConfig, mode: str) -> dict[str, str]:
     raise ValueError(f"Unknown auth mode {mode!r}")
 
 
+def resolve_auth_query(cfg: ApiConfig, mode: str) -> dict[str, str]:
+    """Query parameters that carry credentials, per auth mode (none: left out; bad: a wrong value)."""
+    if mode == "valid":
+        return {n: v for n, env in cfg.auth_query.items() if (v := os.environ.get(env))}
+    if mode == "bad":
+        return {n: INVALID_TOKEN for n in cfg.auth_query}
+    return {}
+
+
 def secret_values(cfg: ApiConfig) -> list[str]:
-    return [*(v for env in cfg.auth.values() if (v := os.environ.get(env))), *cfg.auth_values.values()]
+    login = [v for env in (cfg.login or {}).get("fields", {}).values() if (v := os.environ.get(env))]
+    return [*(v for env in [*cfg.auth.values(), *cfg.auth_query.values()] if (v := os.environ.get(env))), *cfg.auth_values.values(), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
 
 
 def scrub_secrets(text: str, cfg: ApiConfig) -> str:

@@ -26,6 +26,18 @@ _AUTH_FOR = {"missing_auth": "none", "bad_auth": "bad"}
 HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate", "teardown_not_allowed"}
 
 
+def _contains_secret(node, secrets: list[str]) -> bool:
+    """A literal credential among the case's values. Compared on values, not keys or substrings of short words:
+    a short password such as "secret" must not trip on a field named client_secret."""
+    if isinstance(node, dict):
+        return any(_contains_secret(v, secrets) for v in node.values())
+    if isinstance(node, list):
+        return any(_contains_secret(v, secrets) for v in node)
+    if isinstance(node, str):
+        return any(node == s or (len(s) >= 8 and s in node) for s in secrets)
+    return False
+
+
 def conforms(payload: Any, schema: dict, spec: dict) -> bool:
     try:
         jsonschema.validate(payload, with_components(schema, spec))
@@ -70,7 +82,7 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         problems.append(f"unknown_path_params:{sorted(given - names)}")
 
     leaked = [h for h in req.get("headers", {}) if h.lower() in SENSITIVE_HEADERS]
-    if leaked or any(secret in json.dumps(case) for secret in workspace.secret_values(cfg)):
+    if leaked or _contains_secret(case, workspace.secret_values(cfg)):
         problems.append("credentials_in_case")  # cases must use the `auth` mode, never literal credentials
     if cat in _AUTH_FOR and req.get("auth") != _AUTH_FOR[cat]:
         problems.append(f"auth_mode_should_be_{_AUTH_FOR[cat]}")
