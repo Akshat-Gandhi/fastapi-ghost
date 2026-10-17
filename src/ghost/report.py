@@ -112,6 +112,12 @@ from .discover import load_endpoints, operation_id
 from .runner import latency_stats
 
 
+def _drift_item(d: dict) -> dict:
+    """Ghost writes drift items as {where, severity, detail}; an agent may write {key, class, note} instead."""
+    return {**d, "where": d.get("where") or d.get("key") or "?", "severity": d.get("severity") or d.get("class") or "unclassified",
+            "detail": d.get("detail") or d.get("note") or d.get("kind") or ""}
+
+
 def build_report(api: str) -> dict:
     cfg = workspace.load_config(api)
     contract = workspace.read_json(api, "contract.json", {})
@@ -121,7 +127,8 @@ def build_report(api: str) -> dict:
     td_counts: dict[str, int] = {}
     for t in teardown:
         td_counts[t["outcome"]] = td_counts.get(t["outcome"], 0) + 1
-    drift = workspace.read_json(api, "drift.json", {"items": []})["items"]
+    drift = [_drift_item(d) for d in workspace.read_json(api, "drift.json", {"items": []}).get("items", [])
+             if isinstance(d, dict)]
     raw = workspace.read_json(api, "explanations.json", {"explanations": []}).get("explanations", [])
     explanations = {e["case_id"]: e for e in raw if isinstance(e, dict) and "case_id" in e} if isinstance(raw, list) else raw
     drifted = {d["where"] for d in drift}
