@@ -18,6 +18,9 @@ from .redact import redact_body, redact_headers
 from .workspace import ApiConfig, resolve_auth, scrub_secrets
 
 MAX_BODY_CHARS = 2000
+# A pooled keep-alive connection can be closed by the server just as we reuse it. That is not an API
+# failure, so safe requests get one retry on a fresh connection. Writes are never retried.
+_STALE_CONNECTION = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.ConnectError)
 
 
 def percentile(values: list[float], p: float) -> float | None:
@@ -80,7 +83,14 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
             time.sleep(1 / cfg.max_rps)
         start = time.perf_counter()
         try:
-            resp = client.request(**spec)
+            try:
+                resp = client.request(**spec)
+            except _STALE_CONNECTION:
+                if ep.method not in SAFE_METHODS or budget[0] <= 0:
+                    raise
+                budget[0] -= 1
+                start = time.perf_counter()
+                resp = client.request(**spec)
         except httpx.HTTPError as exc:
             statuses.append(None)
             error = scrub_secrets(f"{type(exc).__name__}: {exc}", cfg)
