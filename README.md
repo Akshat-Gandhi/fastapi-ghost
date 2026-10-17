@@ -103,6 +103,7 @@ Agents never call your API; they use `ghost` verbs. Regenerating cases keeps age
 - Only JSON bodies; no multipart/file uploads or OAuth flows yet. Auth is static headers.
 - Endpoints that are intentionally public get a `CASE_FAILED` on the "no credentials" case unless listed in `public_paths`.
 - 1xx and 3xx are not targeted: they are rare in JSON APIs.
+- Write cases change the target's data (a `DELETE` removes id 1, a `POST` creates a title that then conflicts), so re-running against the same stateful server gives noisier results. Run against a sandbox you can reset. Setup/teardown and snapshot/reset are on the roadmap.
 - Schema migrations are `create_all` only; there is no Alembic yet.
 
 ## Development
@@ -112,7 +113,9 @@ Branches: `main` is release-only. Work happens on `feat/*` and `docs/*` branches
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-pytest                       # includes an end-to-end run against examples/todo_app
+playwright install chromium  # once, for the browser tests
+pytest                       # unit, end-to-end (examples/todo_app) and browser UI tests (tests/ui)
+GHOST_SHOT_DIR=shots pytest tests/ui   # keep screenshots
 ```
 
 `examples/todo_app` is a small API with deliberate problems (an undeclared 500, a slow route, auth, a 409) used to test the harness. Research notes on what developers struggle with are in [docs/research/pain-points.md](docs/research/pain-points.md); the design is in [docs/PLAN.md](docs/PLAN.md).
