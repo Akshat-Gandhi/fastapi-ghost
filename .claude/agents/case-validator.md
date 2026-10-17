@@ -28,3 +28,10 @@ You are a read-only reviewer of fastapi-ghost test cases.
 - Send requests to the API.
 - Approve (`ok`) destructive cases when `allow_writes` is false; mark them `drop`.
 - Run Bash for anything except the validate script and read-only inspection.
+
+## Notes
+- `validation_review.json` may be empty or absent. It can only make a verdict stricter. When a case is fixed, delete its entry from the review file (verdicts there are sticky) and re-run validation.
+- A case whose `setup` case is `fix` or `drop` gets `setup_not_runnable`; resolve the setup case first.
+- Teardowns and setup references use the endpoint's path template exactly as in the spec (e.g. `/users/{user_id}`) and its `operation_id`.
+- Endpoints the docs show without security, when others have security, are treated as public: expect no `missing_auth`/`bad_auth` cases for them. Add them only if the code checks auth despite the docs.
+- An app that answers bad credentials with 400, or a duplicate with 400, does not fit the 401/403 and 409 categories: use `observe_5xx` with a custom `expect`.

@@ -1,6 +1,7 @@
 """Baseline test case generation from the contract (S4). Cases are data (JSON), not code."""
 
 from __future__ import annotations
+import zlib
 
 from typing import Any
 
@@ -81,7 +82,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
 
     happy_req = dict(base)
     if ep.method in ("POST", "PUT", "PATCH") and ep.body_schema is not None and example is not None:
-        happy_req["body"] = uniquify(example, ep.body_schema, spec)  # fresh values each run: no 409 on re-run
+        happy_req["body"] = uniquify(example, ep.body_schema, spec, salt=f"{zlib.crc32(op.encode()) % 4096:03x}")  # fresh values each run: no 409 on re-run
     chain = _chain_for(ep, chains)
     chained_params = {chain.param: "{{%s}}" % chain.capture} if chain else None
     if chain:
@@ -99,7 +100,9 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
                 "auth": "valid" if (creates.delete_ep.secured or has_auth) else "none",
             }
     cases = []
-    if not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
+    # PUT/PATCH/DELETE on "/me" would change the very account Ghost signs in with, so later requests would fail.
+    self_edit = has_auth and ep.method in ("PUT", "PATCH", "DELETE") and ep.path.rstrip("/").endswith("/me")
+    if not self_edit and not (ep.method == "DELETE" and not (chain and chain.item_path == ep.path)):
         # A DELETE with no chain would remove data Ghost did not create (seed data): no happy case for it.
         cases.append(happy)
 
@@ -113,7 +116,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
         cases.append(c)
 
     if ep.body_schema is not None:
-        for desc, payload in mutate_invalid(ep.body_schema, example, spec):
+        for desc, payload in mutate_invalid(ep.body_schema, example, spec, form=ep.body_format == "form"):
             add("invalid_payload", desc, {**base, "body": payload}, [422, 400])
     if ep.secured or (has_auth and not public):
         add("missing_auth", "no credentials", {**base, "auth": "none"}, [401, 403])
@@ -122,6 +125,12 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
         add("not_found", "unknown resource id", {**base, "path_params": _path_params(ep, spec, missing=True)}, [404],
             chained=False)
     return cases[:MAX_CASES_PER_ENDPOINT]
+
+
+def open_by_spec(ep: Endpoint, endpoints: list[Endpoint]) -> bool:
+    """When the docs mark some operations as secured and not this one, it is public by design (login, signup,
+    health). With no security anywhere in the docs nothing can be said, so the caller's default applies."""
+    return not ep.secured and any(e.secured for e in endpoints)
 
 
 def run_gen(api: str) -> int:
@@ -142,7 +151,7 @@ def run_gen(api: str) -> int:
         entry = contract.get(key_of(ep))
         if not entry:
             continue
-        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths, chains=chains)
+        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths or open_by_spec(ep, endpoints), chains=chains)
         if cfg.login and ep.path == cfg.login["path"]:
             for c in cases:  # Ghost never puts real credentials in a case; made-up ones are rightly refused
                 if c["category"] == "happy":

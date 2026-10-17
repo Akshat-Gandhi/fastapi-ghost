@@ -131,7 +131,10 @@ def build_report(api: str) -> dict:
         entry = contract.get(key, {})
         mine = [r for r in results if r["operation_id"] == operation_id(ep)]
         expected = entry.get("expected", [])
-        declared = sorted({e["status"] for e in expected})
+        # "Declared" means in the OpenAPI docs. Statuses only found in the source are listed apart.
+        in_docs = {e["status"] for e in expected if e.get("source") == "spec"}
+        declared = sorted(in_docs or {e["status"] for e in expected})
+        code_only = sorted({e["status"] for e in expected} - set(declared)) if in_docs else []
         observed = sorted({s for r in mine for s in r["statuses"] if s is not None})
         timings = [t for r in mine if r["category"] == "happy" for t in r["timings_ms"]]
         lat = latency_stats(timings)
@@ -171,7 +174,7 @@ def build_report(api: str) -> dict:
             else:
                 not_tested = "no test case was valid for it"
         endpoints.append({
-            "not_tested": not_tested,
+            "not_tested": not_tested, "code_only_codes": code_only,
             "declared_not_seen": [c for c in declared if c not in observed] if mine else [],
             "method": ep.method, "path": ep.path, "operation_id": operation_id(ep),
             "declared_codes": declared, "observed_codes": observed, "flags": flags, "latency_ms": lat,

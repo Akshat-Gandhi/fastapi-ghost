@@ -231,6 +231,7 @@ def _entry(route, via: list[str], confidence: str) -> dict:
 
 def scan_source(root: Path) -> list[RaiseSite]:
     g = ProjectGraph.build(root)
+    scan_source.unparsed = g.unparsed  # type: ignore[attr-defined]
     raws = _extract(g)
     by_inner: dict[str, list[_Raw]] = {}
     by_stack: dict[str, list[_Raw]] = {}
@@ -310,5 +311,9 @@ def run_scan(api: str) -> list[RaiseSite]:
         workspace.write_json(api, "source_errors.json", {"sites": [], "skipped": "no source_root in api.toml"})
         return []
     sites = scan_source(cfg.source_root)
-    workspace.write_json(api, "source_errors.json", {"sites": [asdict(s) for s in sites]})
+    unparsed = getattr(scan_source, "unparsed", [])
+    out: dict = {"sites": [asdict(s) for s in sites]}
+    if unparsed:  # a raise in one of these files is invisible to the scan: say so instead of staying silent
+        out["unparsed_files"] = unparsed
+    workspace.write_json(api, "source_errors.json", out)
     return sites
