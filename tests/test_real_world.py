@@ -412,3 +412,25 @@ def test_category_ranges_fit_apps_that_answer_400_or_422_for_auth_and_duplicates
     assert R["missing_auth"](422) and R["missing_auth"](401) and not R["missing_auth"](200)
     assert R["bad_auth"](400) and R["bad_auth"](423) and not R["bad_auth"](404)
     assert R["conflict"](400) and R["conflict"](409) and not R["conflict"](404)
+
+
+# --- seed-data safety and public routes from the contract ------------------------------------------
+
+def test_destructive_cases_never_point_at_seed_ids():
+    from ghost.gen import baseline_cases, _carries_seed_id, _unseeded
+    assert _carries_seed_id({"user_id": 1}) and _carries_seed_id({"a": [{"role_id": 2}]}) and not _carries_seed_id({"title": "x", "count": 3})
+    assert _unseeded({"user_id": 1, "name": "n"}) == {"user_id": 999999999, "name": "n"}
+    e = Endpoint(method="DELETE", path="/user/delete", summary="", params=[Param("user_id", "query", True, {"type": "integer"})],
+                 body_schema=None, body_required=False, declared_codes=[], secured=True)
+    cases = baseline_cases(e, {"expected": [{"status": 200}], "request_example": None}, {}, True)
+    assert all(c["category"] != "happy" for c in cases)  # a delete of seed data is never a happy case
+    for c in cases:
+        assert c["request"]["query"].get("user_id") in (None, 999999999)
+
+
+def test_routes_the_contract_calls_public_get_no_auth_negative_cases():
+    from ghost.gen import open_by_contract
+    contract = {"GET /a": {"auth": "none"}, "GET /b": {"auth": "bearer"}}
+    assert open_by_contract(contract["GET /a"], contract) and not open_by_contract(contract["GET /b"], contract)
+    flat = {"GET /a": {"auth": "none"}, "GET /b": {"auth": "none"}}
+    assert not open_by_contract(flat["GET /a"], flat)  # no information: default applies
