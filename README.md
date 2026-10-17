@@ -96,6 +96,23 @@ Agents never call your API; they use `ghost` verbs. Regenerating cases keeps age
 - `api.toml` holds **environment variable names**, never tokens. Stored responses are redacted and scrubbed of the literal token values. Case files containing credentials are rejected.
 - Sign-up can be disabled (`GHOST_ALLOW_SIGNUP=0`); the first account is always allowed.
 
+## Repeat runs against a stateful server
+
+Write cases would normally leave data behind (a created title then 409s next time, a `DELETE` removes seed data). Ghost avoids that without restarting your server:
+
+- **Unique values per run.** In happy `POST/PUT/PATCH` bodies, string fields named like `title, name, email, username, slug, code` (also `*_name`, `*_email`, ...) get `ghost-{{nonce}}`, where the nonce is 6 random hex characters chosen per run. The value is shortened or padded to respect `minLength`/`maxLength`, `format: email` keeps a valid address, and fields with `enum`, `pattern` or another `format` are left alone. Invalid-payload cases are never touched.
+- **Setup, captures, teardown.** When the contract shows `POST /things` returning an id (in its documented success response) and an item path `/things/{id}`, the baseline cases chain: the POST happy case `captures` the id, happy GET/PUT/DELETE on the item path declare `setup` (the POST case) and use `{{thing_id}}`, and the POST case gets a generated `teardown` (`DELETE /things/{id}`) that runs after all cases, newest first. So Ghost deletes only what it created. A teardown that gets 404 (the DELETE case already removed it) is recorded as `gone`; a failed teardown is reported (`state.teardown_problems` in `report.json`) and never fails the run.
+- **No chain, no destructive happy case.** If there is no creating `POST`, no `DELETE` happy case is generated (it would delete data Ghost did not create); GET/PUT happy cases use the spec example as before. Chains are only generated when writes are allowed for the host and the paths are not in `blocked_paths`.
+- **Optional reset hook.** `api.toml` may name one HTTP call on the same `base_url`, run once before the cases, only when `allow_writes` is true and the host is allowed (and the path is not in `blocked_paths`; it counts toward `max_requests`). It is sent with the valid credentials. There is no shell command option, by design.
+
+```toml
+[reset]
+method = "POST"        # POST, PUT, PATCH or DELETE
+path = "/admin/reset"  # relative to base_url
+```
+
+Everything captured stays in memory for the run. Case files and results never contain captured values. Gates are unchanged: `allow_writes`, `allowed_hosts`, `blocked_paths`, `max_requests` and the validation verdict apply to setup cases, teardown and reset alike; reads still run before writes except where a `setup` chain needs a creating case earlier. `ghost validate` checks the new fields (see `.claude/skills/ghost-validate/references/validation-checklist.md`).
+
 ## Known limits
 
 - Status codes are inferred from the spec and from direct `raise HTTPException(...)` in route functions. Errors raised in helper/service layers are not mapped to endpoints yet, and custom exception handlers are not followed.
@@ -103,7 +120,7 @@ Agents never call your API; they use `ghost` verbs. Regenerating cases keeps age
 - Only JSON bodies; no multipart/file uploads or OAuth flows yet. Auth is static headers.
 - Endpoints that are intentionally public get a `CASE_FAILED` on the "no credentials" case unless listed in `public_paths`.
 - 1xx and 3xx are not targeted: they are rare in JSON APIs.
-- Write cases change the target's data (a `DELETE` removes id 1, a `POST` creates a title that then conflicts), so re-running against the same stateful server gives noisier results. Run against a sandbox you can reset. Setup/teardown and snapshot/reset are on the roadmap.
+- Write cases change the target's data, so Ghost keeps repeat runs quiet instead of relying on a fresh server (see "Repeat runs against a stateful server"). It handles the common create/read/update/delete shape; it cannot clean up side effects it cannot see (emails sent, counters, audit rows, ids the response does not return), uniqueness rules on fields other than `title/name/email/username/slug/code`, or resources created by non-`POST` flows. For those, use the `[reset]` hook or a sandbox you can reset.
 - Schema migrations are `create_all` only; there is no Alembic yet.
 
 ## Development

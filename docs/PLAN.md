@@ -35,7 +35,7 @@ Design rules
 | S7 explain | agent `failure-explainer` + skill `ghost-explain` | results, contract, source_errors | explanations.json |
 | S8 report | agent `report-writer` + skill `ghost-report` | everything | report.md, report.json |
 
-Hard gates: S6 never runs without S5 verdict `ok`. Writes run only with `allow_writes = true`. S7 is skipped when S6 finds nothing wrong. A failed stage writes `{"stage":..., "error":...}` and later stages degrade; final exit is 0. Validator may send a case back to the writer at most 2 times.
+Hard gates: S6 never runs without S5 verdict `ok`. Writes run only with `allow_writes = true`. S7 is skipped when S6 finds nothing wrong. A failed stage writes `{"stage":..., "error":...}` and later stages degrade; final exit is 0. Stateful reruns: cases may carry `setup`, `captures` and a generated `teardown`, plus an optional `[reset]` HTTP hook in `api.toml`; the same gates apply to them (see README, "Repeat runs against a stateful server"). Validator may send a case back to the writer at most 2 times.
 
 ## Case file (`cases/<op_id>.json`)
 
