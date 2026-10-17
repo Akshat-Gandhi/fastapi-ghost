@@ -63,3 +63,9 @@ asked to report what in the harness got in its way.
 - `[login] extra` is fixed per run, so scope-denial cases cannot be written.
 - Multipart file uploads are not generated.
 - Placeholder bodies in the contract for errors raised from library code (`{"detail": "ghost"}`).
+
+### Round 3: FastAPI-Template (Tortoise ORM admin backend, SQLite, own Redis)
+
+Staged workflow `jta`: 37 endpoints, 149 cases run. Findings: `GET /menu/get` returns 500 for an existing menu (an ORM object is returned without `to_dict()`); `GET /users/get` answers 400 for a missing user; `GET /auditlog/list` returns 422 on a default request (`Query("")` on a datetime). Error bodies are `{code,msg,data}` while the docs declare `{detail:[...]}`.
+Library gap fixed: a login **username** (e.g. `admin`) is no longer treated as a secret, so spec examples that use it are not rejected as "credentials in case"; only password/token/secret-like login fields are.
+Still open: baseline gen builds update/delete happy cases from spec-example ids and `admin` values, which are dangerous against a live admin account (the agents removed 42 by hand); re-running `gen.sh` overwrites hand edits to baseline cases.
