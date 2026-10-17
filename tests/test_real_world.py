@@ -133,8 +133,10 @@ def test_refused_before_login_is_inconclusive():
 
 
 def test_happy_404_on_made_up_id_is_inconclusive_unless_the_record_was_created():
-    assert refine_outcome("mismatch", case("happy"), ep(), 404) == "inconclusive"
-    assert refine_outcome("mismatch", case("happy", setup=["create"]), ep(), 404) == "mismatch"
+    assert refine_outcome("mismatch", case("happy", request={"path_params": {"id": "ghost"}}), ep(), 404) == "inconclusive"
+    chained = {"request": {"path_params": {"id": "{{id}}"}}}
+    assert refine_outcome("mismatch", case("happy", setup=["create"], **chained), ep(), 404) == "mismatch"
+    assert refine_outcome("mismatch", case("invalid_payload", **chained), ep(), 404) == "mismatch"
     assert refine_outcome("mismatch", case("happy"), ep(path="/x"), 200) == "mismatch"
 
 
@@ -175,3 +177,47 @@ def test_report_names_why_an_endpoint_was_not_tested(home):
     delete = next(e for e in rep["endpoints"] if e["method"] == "DELETE")
     assert delete["not_tested"] == "changes data and writes are off"
     assert "not tested: changes data and writes are off" in render_markdown(rep)
+
+
+def test_login_with_nested_json_body_and_custom_prefix(home, monkeypatch):
+    app = FastAPI()
+
+    @app.post("/api/users/login")
+    def login(body: dict):
+        assert body == {"user": {"email": "e@x.io", "password": "pw"}}
+        return {"user": {"token": "jwt-1"}}
+
+    monkeypatch.setenv("T_E", "e@x.io")
+    monkeypatch.setenv("T_P", "pw")
+    workspace.write_default_config("n2", "http://localhost:1", None, False)
+    path = workspace.api_dir("n2") / "api.toml"
+    path.write_text(path.read_text() + '\n[login]\npath = "/api/users/login"\nas = "json"\n'
+                    'fields = { "user.email" = "T_E", "user.password" = "T_P" }\n'
+                    'token_path = "user.token"\nprefix = "Token "\n')
+    ensure_login("n2", TestClient(app, base_url="http://localhost:1"))
+    assert workspace.resolve_auth(workspace.load_config("n2"), "valid") == {"Authorization": "Token jwt-1"}
+
+
+# --- chains over wrapped responses and sub-resources --------------------------------------------
+
+def test_id_inside_a_single_wrapper_key_is_found():
+    from ghost.state import _id_field
+    spec = {"components": {"schemas": {"Art": {"type": "object", "properties": {"slug": {"type": "string"}}}}}}
+    props = {"article": {"$ref": "#/components/schemas/Art"}}
+    assert _id_field(props, "slug", spec) == "article.slug"
+    assert _id_field({"id": {"type": "integer"}}, "item_id", spec) == "id"
+    assert _id_field({"a": {"type": "object", "properties": {}}, "b": {"type": "object", "properties": {}}}, "x", spec) is None
+
+
+def test_sub_resources_use_the_parent_chain():
+    from ghost.gen import _chain_for
+    from ghost.state import Chain
+
+    chain = Chain(ep(path="/a"), "post_a.happy.1", "slug", "article.slug", "/a/{slug}", "slug", None)
+    chains = {"/a/{slug}": chain}
+    mk = lambda method, path: Endpoint(method=method, path=path, summary="", params=[], body_schema=None,
+                                       body_required=False, declared_codes=[], secured=False)
+    assert _chain_for(mk("GET", "/a/{slug}"), chains) is chain
+    assert _chain_for(mk("POST", "/a/{slug}/comments"), chains) is chain
+    assert _chain_for(mk("POST", "/a/{slug}"), chains) is None
+    assert _chain_for(mk("GET", "/b/{id}"), chains) is None

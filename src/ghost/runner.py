@@ -84,8 +84,11 @@ def refine_outcome(outcome: str, case: dict, ep: Endpoint, status: int | None) -
             return "open"
         if status in PRECONDITION_STATUSES:
             return "inconclusive"
-    if category == "happy" and status == 404 and not case.get("setup") and any(p.location == "path" for p in ep.params):
-        return "inconclusive"  # nothing exists at the made-up id; a record Ghost created would be needed
+    if category in ("happy", "invalid_payload") and status == 404:
+        given = (case.get("request") or {}).get("path_params") or {}
+        made_up = [p for p in ep.params if p.location == "path" and not str(given.get(p.name, "")).startswith("{{")]
+        if made_up:
+            return "inconclusive"  # nothing exists at the made-up id; a record Ghost created would be needed
     return outcome
 
 

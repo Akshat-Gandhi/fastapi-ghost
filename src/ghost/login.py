@@ -33,7 +33,11 @@ def ensure_login(api: str, client: httpx.Client) -> bool:
         value = os.environ.get(env)
         if value is None:
             raise ValueError(f"[login] needs the environment variable {env} (for field '{field}'), but it is not set.")
-        payload[field] = value
+        node = payload  # "user.email" builds {"user": {"email": ...}} for APIs that wrap their bodies
+        *parents, leaf = field.split(".")
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = value
     kwargs = {"json": payload} if spec["as"] == "json" else {"data": payload}
     resp = client.request(spec["method"], f"{cfg.base_url}{spec['path']}", **kwargs)
     if resp.status_code >= 400:
