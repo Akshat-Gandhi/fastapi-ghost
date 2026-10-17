@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -27,6 +28,17 @@ def resolve_url(base_url: str) -> str:
     return base_url
 
 
+def resolve_source(path: str) -> Path | None:
+    """Inside Docker, source folders live under the read-only /sources mount; elsewhere any local path works."""
+    if not path:
+        return None
+    root = Path(os.environ.get("GHOST_SOURCES_DIR", "/sources")) if os.environ.get("GHOST_IN_DOCKER") == "1" else None
+    candidate = (root / path.lstrip("/")).resolve() if root else Path(path).expanduser().resolve()
+    if root and root.resolve() not in candidate.parents and candidate != root.resolve():
+        return None  # no escaping the mount with ../
+    return candidate if candidate.is_dir() else None
+
+
 def execute_run(factory: sessionmaker, run_id: int) -> None:
     with factory() as db:
         run = db.get(Run, run_id)
@@ -40,6 +52,7 @@ def execute_run(factory: sessionmaker, run_id: int) -> None:
                 base_url=base_url.rstrip("/"),
                 allow_writes=project.allow_writes,
                 samples=project.samples,
+                source_root=resolve_source(project.source_path),
                 auth_values=decrypt_headers(project.headers_enc),
                 # Ticking "allow writes" in the UI is the explicit consent for this host.
                 allowed_hosts=[host] if project.allow_writes else [],

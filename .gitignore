@@ -224,3 +224,5 @@ __marimo__/
 .ghost/*/runs/
 ghost.db
 secret.key
+
+/sources/
