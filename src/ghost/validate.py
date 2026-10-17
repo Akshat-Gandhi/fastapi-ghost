@@ -101,7 +101,7 @@ def run_validate(api: str) -> dict:
                 verdicts[case["id"]] = {"verdict": "drop", "problems": ["unknown_endpoint"], "warnings": []}
                 continue
             problems, warnings = validate_case(case, ep, cfg, spec)
-            fingerprint = json.dumps([ep.method, ep.path, case["request"]], sort_keys=True, default=str)
+            fingerprint = json.dumps([ep.method, ep.path, case["request"], case.get("expect")], sort_keys=True, default=str)
             if fingerprint in seen:
                 problems.append("duplicate")
             seen.add(fingerprint)
