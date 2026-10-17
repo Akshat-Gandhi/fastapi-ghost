@@ -169,11 +169,13 @@ def update_from_results(contract: dict, results: list[dict]) -> dict:
             continue
         known = set(statuses(entry["expected"]))
         if r["status"] not in known:
-            seen = next((u for u in entry["unexpected"] if u["status"] == r["status"]), None)
-            if seen:
-                seen["cases"] = sorted(set(seen["cases"]) | {r["case_id"]})
+            # An agent may have written its own `unexpected` entries (a different shape, no `cases`): tolerate them.
+            unexpected = entry.setdefault("unexpected", [])
+            seen = next((u for u in unexpected if isinstance(u, dict) and u.get("status") == r["status"]), None)
+            if seen is not None:
+                seen["cases"] = sorted(set(seen.get("cases") or []) | {r["case_id"]})
             else:
-                entry["unexpected"].append({"status": r["status"], "source": "observed", "cases": [r["case_id"]]})
+                unexpected.append({"status": r["status"], "source": "observed", "cases": [r["case_id"]]})
     return contract
 
 

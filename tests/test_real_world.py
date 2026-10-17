@@ -434,3 +434,13 @@ def test_routes_the_contract_calls_public_get_no_auth_negative_cases():
     assert open_by_contract(contract["GET /a"], contract) and not open_by_contract(contract["GET /b"], contract)
     flat = {"GET /a": {"auth": "none"}, "GET /b": {"auth": "none"}}
     assert not open_by_contract(flat["GET /a"], flat)  # no information: default applies
+
+
+def test_contract_update_tolerates_agent_written_unexpected_entries():
+    from ghost.contract import update_from_results
+    contract = {"GET /x": {"expected": [{"status": 200}], "unexpected": [{"status": 500, "shape": {"code": 500}}]}}
+    results = [{"method": "GET", "path": "/x", "status": 500, "case_id": "a"}, {"method": "GET", "path": "/x", "status": 418, "case_id": "b"}]
+    out = update_from_results(contract, results)["GET /x"]["unexpected"]
+    assert out[0]["cases"] == ["a"] and {u["status"] for u in out} == {500, 418}
+    bare = {"GET /y": {"expected": []}}
+    assert update_from_results(bare, [{"method": "GET", "path": "/y", "status": 404, "case_id": "c"}])["GET /y"]["unexpected"]
