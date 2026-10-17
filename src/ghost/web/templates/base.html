@@ -6,9 +6,11 @@
 <title>{% block title %}fastapi-ghost{% endblock %}</title>
 {% block head %}{% endblock %}
 <style>
-  :root { --bg:#fafafa; --fg:#1b1b1f; --muted:#6b6b76; --card:#fff; --line:#e3e3e8; --accent:#4f46e5; --bad:#c62828; --warn:#b26a00; --good:#2e7d32; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#141417; --fg:#ececf1; --muted:#9a9aa6; --card:#1d1d22; --line:#2e2e36; --accent:#8b86ff; --bad:#ff6b6b; --warn:#ffb74d; --good:#66bb6a; } }
+  :root { --bg:#fafafa; --fg:#1b1b1f; --muted:#6b6b76; --card:#fff; --line:#e3e3e8; --accent:#4f46e5; --on-accent:#fff; --on-bad:#fff; --bad:#c62828; --warn:#965800; --good:#2e7d32; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141417; --fg:#ececf1; --muted:#9a9aa6; --card:#1d1d22; --line:#2e2e36; --accent:#a5a1ff; --on-accent:#141417; --on-bad:#141417; --bad:#ff6b6b; --warn:#ffb74d; --good:#66bb6a; } }
   * { box-sizing: border-box; }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,sans-serif; }
   header { display:flex; justify-content:space-between; align-items:center; padding:12px 24px; border-bottom:1px solid var(--line); background:var(--card); }
   header a.brand { font-weight:700; color:var(--fg); text-decoration:none; }
@@ -17,9 +19,9 @@
   label { display:block; margin:10px 0 4px; font-weight:600; }
   input[type=text], input[type=email], input[type=password], input[type=number], textarea { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
   textarea { font-family: ui-monospace,monospace; min-height:80px; }
-  button, .btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
-  button.link { background:none; color:var(--muted); padding:0; }
-  button.danger { background:var(--bad); }
+  button, .btn { background:var(--accent); color:var(--on-accent); border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
+  button.link { background:none; color:var(--muted); padding:0; margin-left:8px; text-decoration:underline; }
+  button.danger { background:var(--bad); color:var(--on-bad); }
   .muted { color:var(--muted); } .error { color:var(--bad); }
   .table-wrap { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; }
@@ -28,6 +30,7 @@
   .flag.bad { color:var(--bad); } .flag.warn { color:var(--warn); }
   .code { font-family:ui-monospace,monospace; }
   form.inline { display:inline; }
+  @media (max-width: 640px) { .hide-sm { display:none; } th, td { padding:8px 6px; } }
 </style>
 </head>
 <body>

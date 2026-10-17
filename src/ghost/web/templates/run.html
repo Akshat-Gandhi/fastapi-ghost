@@ -21,14 +21,14 @@
     <span class="code">{{ d.where }}</span> {{ d.detail }}</div>{% endfor %}</div>
 {% endif %}
 <div class="card table-wrap"><table>
-<thead><tr><th>Endpoint</th><th>Declared</th><th>Observed</th><th>p95</th><th>Flags</th></tr></thead>
+<thead><tr><th>Endpoint</th><th class="hide-sm">Declared</th><th>Observed</th><th class="hide-sm">p95</th><th>Flags</th></tr></thead>
 <tbody>
 {% for e in rep.endpoints %}
 <tr>
   <td class="code">{{ e.method }} {{ e.path }}</td>
-  <td class="code">{{ e.declared_codes|join(", ") }}</td>
+  <td class="code hide-sm">{{ e.declared_codes|join(", ") }}</td>
   <td class="code">{{ e.observed_codes|join(", ") }}</td>
-  <td>{% if e.latency_ms.p95 is not none %}{{ "%.0f"|format(e.latency_ms.p95) }}ms{% endif %}</td>
+  <td class="hide-sm">{% if e.latency_ms.p95 is not none %}{{ "%.0f"|format(e.latency_ms.p95) }}ms{% endif %}</td>
   <td>{% for f in e.flags %}<span class="flag {{ 'bad' if f in ('5XX','UNDECLARED','DRIFT') else 'warn' }}">{{ f }}</span>{% endfor %}</td>
 </tr>
 {% endfor %}
