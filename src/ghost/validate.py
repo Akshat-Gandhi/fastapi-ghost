@@ -22,6 +22,8 @@ _EXPECT_RANGES = {
     "not_found": lambda c: c == 404,
     "conflict": lambda c: c == 409,
 }
+_EXPECT_HINT = {"happy": "2xx", "invalid_payload": "400 or 422", "missing_auth": "401 or 403",
+                "bad_auth": "401 or 403", "not_found": "404", "conflict": "409"}
 _AUTH_FOR = {"missing_auth": "none", "bad_auth": "bad"}
 HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate", "teardown_not_allowed"}
 
@@ -62,6 +64,7 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         problems.append("bad_expected_status")
     elif cat in _EXPECT_RANGES and not any(_EXPECT_RANGES[cat](s) for s in statuses):
         problems.append("expected_status_does_not_match_category")
+        warnings.append(f"hint: a '{cat}' case must expect {_EXPECT_HINT[cat]}; change the category, not the status")
 
     is_write = ep.method not in SAFE_METHODS
     if is_write and not case.get("destructive"):

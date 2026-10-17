@@ -28,7 +28,7 @@ def run(
 ) -> None:
     """Discover endpoints from /openapi.json, probe them, and print a report."""
     base_url = f"http://{host}:{port}"
-    with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=10.0, limits=workspace.CLIENT_LIMITS) as client:
         try:
             endpoints = discover_endpoints(base_url, client)
         except httpx.HTTPError as exc:
@@ -88,7 +88,7 @@ def discover(api: str = typer.Option(..., help="API name from `ghost init`.")) -
     """S1: snapshot /openapi.json and parse endpoints."""
     def go():
         cfg = workspace.load_config(api)
-        with httpx.Client(timeout=cfg.timeout_s) as client:
+        with httpx.Client(timeout=cfg.timeout_s, limits=workspace.CLIENT_LIMITS) as client:
             return snapshot_spec(api, client)
     eps = _guard(go)
     typer.echo(f"Discovered {len(eps)} endpoints -> {workspace.api_dir(api)}/endpoints.json")

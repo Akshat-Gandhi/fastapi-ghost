@@ -260,3 +260,47 @@ def test_form_bodies_are_sent_as_forms():
     cfg = workspace.ApiConfig(base_url="http://localhost:1")
     sent = build_request({"request": {"body": {"username": "u", "n": 3}, "auth": "none"}}, endpoint, cfg)
     assert sent["data"] == {"username": "u", "n": "3"} and "json" not in sent
+
+
+@pytest.fixture()
+def env_bundle(tmp_path, monkeypatch):
+    from ghost.contract import run_contract
+    from ghost.discover import snapshot_spec
+    from ghost.gen import run_gen
+    from ghost.runner import run_all
+    from ghost.validate import run_validate
+    monkeypatch.setenv("GHOST_HOME", str(tmp_path / ".ghost"))
+    monkeypatch.setenv("TODO_TOKEN", "Bearer s3cret-token-value")
+    app = FastAPI()
+
+    @app.get("/boom")
+    def boom():
+        raise HTTPException(500, "x")
+
+    workspace.write_default_config("todo", "http://localhost:1", None, False)
+    p = workspace.api_dir("todo") / "api.toml"
+    p.write_text(p.read_text().replace("# Authorization", "Authorization").replace("MY_API_TOKEN_HEADER_VALUE", "TODO_TOKEN"))
+    client = TestClient(app, base_url="http://localhost:1")
+    snapshot_spec("todo", client)
+    run_contract("todo")
+    run_gen("todo")
+    run_validate("todo")
+    run_all("todo", client)
+
+
+def test_bundle_carries_what_was_sent(env_bundle):
+    import json as _json
+    from ghost.explain import make_bundles
+    names = make_bundles("todo")
+    assert names
+    b = _json.loads((workspace.api_dir("todo") / names[0]).read_text())
+    assert b["base_url"] and b["at"] and b["request"]["url"].startswith("http://localhost:1/")
+    assert "s3cret-token-value" not in _json.dumps(b)
+
+
+def test_dropping_connections_never_raises_on_any_client():
+    from ghost.runner import _drop_connections
+    _drop_connections(TestClient(FastAPI()))
+    client = httpx.Client()
+    _drop_connections(client)
+    client.close()

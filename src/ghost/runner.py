@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -111,6 +112,23 @@ def _capture(resp: httpx.Response, cfg: ApiConfig) -> tuple[Any, bool]:
     return body, truncated
 
 
+def _drop_connections(client: httpx.Client) -> None:
+    """Servers often close the connection after an unhandled error (a 500). The next request, if it reused that
+    connection, would fail with a reset that has nothing to do with the endpoint under test."""
+    try:
+        client._transport._pool.close()  # httpcore pool; reopens on demand. Absent for test transports.
+    except Exception:
+        pass
+
+
+def _sent_summary(spec: dict, cfg: ApiConfig, case: dict) -> dict:
+    """What went on the wire, for evidence: URL, query and body, without credentials (auth query values dropped)."""
+    query = {k: v for k, v in (spec.get("params") or {}).items() if k not in cfg.auth_query}
+    summary = {"url": spec["url"], "query": query or None, "body": spec.get("json", spec.get("data")),
+               "auth": case["request"].get("auth")}
+    return json.loads(scrub_secrets(json.dumps(summary, default=str), cfg))
+
+
 def _skipped(case: dict, ep: Endpoint, error: str) -> dict:
     return {
         "case_id": case["id"], "operation_id": case.get("operation_id") or operation_id(ep), "method": ep.method,
@@ -158,6 +176,8 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
             break
         timings.append((time.perf_counter() - start) * 1000)
         statuses.append(resp.status_code)
+        if resp.status_code >= 500:
+            _drop_connections(client)
         if i == 0:
             first = resp
             body, truncated = _capture(resp, cfg)
@@ -172,6 +192,8 @@ def run_case(case: dict, ep: Endpoint, cfg: ApiConfig, client: httpx.Client, bud
         "path": ep.path, "category": case["category"], "title": case["title"], "auth": case["request"].get("auth"),
         "expected": expected, "status": statuses[0], "statuses": statuses, "body": body,
         "body_truncated": truncated, "response_headers": headers, "timings_ms": timings,
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "request_sent": _sent_summary(spec, cfg, case),
         "outcome": refine_outcome(classify_outcome(expected, statuses), case, ep, statuses[0]), "error": error,
     }
 
@@ -272,7 +294,7 @@ def run_teardowns(ctx: RunContext, cfg: ApiConfig, client: httpx.Client, budget:
 def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
     from .login import ensure_login
 
-    own_login = client or httpx.Client(timeout=workspace.load_config(api).timeout_s)
+    own_login = client or httpx.Client(timeout=workspace.load_config(api).timeout_s, limits=workspace.CLIENT_LIMITS)
     try:
         ensure_login(api, own_login)
     finally:
@@ -285,13 +307,15 @@ def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
     by_op = {operation_id(e): e for e in load_endpoints(api)}
     budget = [cfg.max_requests]
     own_client = client is None
-    client = client or httpx.Client(timeout=cfg.timeout_s)
+    client = client or httpx.Client(timeout=cfg.timeout_s, limits=workspace.CLIENT_LIMITS)
     results: list[dict] = []
     ctx = RunContext()
     # Reads first, then POST, PUT/PATCH, DELETE last, so a delete cannot remove data a later read needs.
     # A case with `setup` first runs the cases it names (once per run), so chains keep working across that order.
     order = {"GET": 0, "HEAD": 0, "OPTIONS": 0, "POST": 1, "PUT": 2, "PATCH": 2, "DELETE": 3}
-    files = sorted(load_case_files(api), key=lambda cf: order.get(cf["method"], 2))
+    # Within a method, deeper paths first: DELETE /articles/{slug}/comments/{id} must run before DELETE /articles/{slug}
+    # removes the record they all hang off.
+    files = sorted(load_case_files(api), key=lambda cf: (order.get(cf["method"], 2), -cf["path"].count("/") if cf["method"] == "DELETE" else 0))
     runnable: dict[str, tuple[dict, Endpoint]] = {}  # case id -> (case, endpoint); the first of a duplicate id
     queue: list[tuple[dict, Endpoint]] = []
     for cf in files:

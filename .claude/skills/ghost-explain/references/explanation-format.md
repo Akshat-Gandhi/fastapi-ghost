@@ -23,5 +23,7 @@ A list with one entry per failing case; `case_id` links it to the report:
 - `user_sees`: the exact status and body the end user receives, copied from the bundle. For a 422, the real `detail` list.
 - `internal_code`: application error code from the body or contract, else `null`.
 - `fix`: a concrete change, or what to check when inconclusive.
-- `repro`: a curl line with `$TOKEN` placeholder; method, path and body from the bundle.
+- `repro`: a curl line with a `$TOKEN` placeholder. Use the bundle's `base_url`, and `request.url`, `request.query`, `request.body` (what was actually sent). The auth header scheme is in `api.toml` (`[auth]` header name, or `[login]` header and prefix, e.g. `Authorization: Token $TOKEN`); never print a real token.
+- For a case that got no response (`error` outcome), use `user_sees: {"status": null, "body": null}`.
+- A bundle holds the request that was sent (`request.url/query/body`), `base_url` and `at` (UTC time of the call, for matching server logs).
 - Never include secrets or literal tokens.
