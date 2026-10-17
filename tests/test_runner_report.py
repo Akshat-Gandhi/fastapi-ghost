@@ -219,3 +219,50 @@ def test_report_uses_plain_labels_and_legend(env):
     md = (workspace.api_dir("todo") / "report.md").read_text()
     assert "Server error" in md and "5XX" not in md
     assert "## What the labels mean" in md and "crashed or failed internally" in md
+
+
+def _case(method="GET"):
+    return {"id": "x.happy.1", "operation_id": "get_x", "category": "happy", "title": "t", "destructive": method != "GET",
+            "request": {"path_params": {}, "query": {}, "headers": {}, "body": None, "auth": "none"},
+            "expect": {"status": [200]}}
+
+
+def _flaky_client(fail_times, calls):
+    import httpx
+
+    def handler(request):
+        calls.append(request.method)
+        if len(calls) <= fail_times:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(200, json={"ok": True})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_safe_request_retries_once_on_stale_connection():
+    from ghost.discover import Endpoint
+    from ghost.runner import run_case
+    from ghost.workspace import ApiConfig
+    calls = []
+    cfg = ApiConfig("http://localhost:1", samples=1)
+    r = run_case(_case(), Endpoint("GET", "/x"), cfg, _flaky_client(1, calls), [100])
+    assert r["outcome"] == "expected" and r["error"] is None and len(calls) == 2
+
+
+def test_second_failure_is_still_reported():
+    from ghost.discover import Endpoint
+    from ghost.runner import run_case
+    from ghost.workspace import ApiConfig
+    calls = []
+    r = run_case(_case(), Endpoint("GET", "/x"), ApiConfig("http://localhost:1", samples=1), _flaky_client(2, calls), [100])
+    assert r["outcome"] == "error" and "RemoteProtocolError" in r["error"] and len(calls) == 2
+
+
+def test_writes_are_never_retried():
+    from ghost.discover import Endpoint
+    from ghost.runner import run_case
+    from ghost.workspace import ApiConfig
+    calls = []
+    r = run_case(_case("POST"), Endpoint("POST", "/x"), ApiConfig("http://localhost:1", samples=1, allow_writes=True),
+                 _flaky_client(1, calls), [100])
+    assert r["outcome"] == "error" and len(calls) == 1
