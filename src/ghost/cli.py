@@ -162,3 +162,30 @@ def pipeline(api: str = typer.Option(..., help="API name from `ghost init`.")) -
     s = rep["summary"]
     typer.echo(f"{api}: {s['endpoints']} endpoints, {s['cases_run']} cases, {s['with_findings']} with findings")
     typer.echo(f"Report: {workspace.api_dir(api)}/report.md")
+
+
+@app.command(name="reset-password")
+def reset_password_cmd(
+    user: str = typer.Argument(..., help="Email or username, e.g. admin."),
+    password: str = typer.Option(None, help="Temporary password to set (default: a random one is generated)."),
+) -> None:
+    """Reset a web-app user's password (for when you are locked out). They must change it at next sign-in.
+
+    Uses GHOST_DATABASE_URL, so with Docker run:  docker compose exec app ghost reset-password admin"""
+    try:
+        from .web.accounts import find_user, reset_password
+        from .web.db import make_session_factory
+    except ImportError:
+        typer.secho("Needs the web extras: pip install 'fastapi-ghost[web]'", fg="red", err=True)
+        raise typer.Exit(2)
+    with make_session_factory()() as db:
+        target = find_user(db, user)
+        if not target:
+            typer.secho(f"No such user: {user}", fg="red", err=True)
+            raise typer.Exit(2)
+        if password is not None and len(password) < 8:
+            typer.secho("Password must be at least 8 characters.", fg="red", err=True)
+            raise typer.Exit(2)
+        temp = reset_password(db, target, password)
+    typer.echo(f"Temporary password for {user}: {temp}")
+    typer.echo("They must choose a new password at next sign-in. All their sessions were signed out.")

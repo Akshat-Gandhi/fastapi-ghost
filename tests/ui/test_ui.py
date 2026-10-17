@@ -368,6 +368,35 @@ def test_default_admin_is_forced_to_change_password(servers, browser):
     expect(pg).to_have_url(f"{ghost}/projects")
     expect(pg.get_by_role("link", name="Change password")).to_be_visible()  # available any time afterwards
 
+    # --- admin manages users: add one, reset their password, they must choose their own
+    pg.get_by_role("link", name="Users").click()
+    expect(pg).to_have_url(f"{ghost}/admin/users")
+    pg.get_by_label("Email or username").fill("sam")
+    pg.get_by_label("Initial password (8+ characters)").fill("initial-pass-1")
+    pg.get_by_role("button", name="Add user").click()
+    expect(pg.get_by_role("status")).to_contain_text("Created sam")
+    pg.locator("tr", has_text="sam").get_by_role("button", name="Reset password").click()
+    notice = pg.get_by_role("status")
+    expect(notice).to_contain_text("Temporary password for sam:")
+    temp = notice.inner_text().split("Temporary password for sam:")[1].split()[0]
+    shot(pg, "10-admin-users")
+    pg.get_by_role("button", name="Sign out").click()
+    pg.get_by_label("Email or username").fill("sam")
+    pg.get_by_label("Password").fill(temp)
+    pg.get_by_role("button", name="Sign in").click()
+    expect(pg).to_have_url(f"{ghost}/change-password")
+    pg.get_by_label("Current password").fill(temp)
+    pg.get_by_label("New password (8+ characters)").fill("sams-own-password-1")
+    pg.get_by_label("Confirm new password").fill("sams-own-password-1")
+    pg.get_by_role("button", name="Change password").click()
+    expect(pg).to_have_url(f"{ghost}/projects")
+    assert pg.request.get(f"{ghost}/admin/users").status == 404  # sam is not an admin
+    expect(pg.get_by_role("link", name="Users")).to_have_count(0)
+    pg.get_by_role("button", name="Sign out").click()
+    pg.get_by_label("Email or username").fill("admin")
+    pg.get_by_label("Password").fill("a-much-better-pass")
+    pg.get_by_role("button", name="Sign in").click()
+
     pg.get_by_role("button", name="Sign out").click()
     pg.get_by_label("Email or username").fill("admin")
     pg.get_by_label("Password").fill("admin")

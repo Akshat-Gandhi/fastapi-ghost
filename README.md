@@ -13,7 +13,7 @@ docker compose up -d
 open http://127.0.0.1:8080     # sign in as admin / admin, choose a new password, enroll a project, press Run
 ```
 
-On a brand-new install the only account is `admin` / `admin`, and you are sent to a change-password page before you can do anything else (any account still using a known default password is forced to change it too). Set `GHOST_ADMIN_PASSWORD` in `.env` to choose the initial password instead. The default account is created only when there are no users at all, so it never appears on an existing instance.
+On a brand-new install the only account is `admin` / `admin`, and you are sent to a change-password page before you can do anything else (any account still using a known default password is forced to change it too). Admins get a **Users** page to add users and reset a forgotten password (the person must choose a new one at next sign-in); if everyone is locked out, run `docker compose exec app ghost reset-password admin`. There is no email, so there is no emailed reset link. Set `GHOST_ADMIN_PASSWORD` in `.env` to choose the initial password instead. The default account is created only when there are no users at all, so it never appears on an existing instance.
 
 Everything persists in Docker volumes (`ghost_pgdata` for Postgres, `ghost_data` for per-project workspaces and the encryption key). The UI is bound to `127.0.0.1` only.
 
