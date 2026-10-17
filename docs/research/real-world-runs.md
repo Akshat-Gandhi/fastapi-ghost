@@ -69,3 +69,18 @@ asked to report what in the harness got in its way.
 Staged workflow `jta`: 37 endpoints, 149 cases run. Findings: `GET /menu/get` returns 500 for an existing menu (an ORM object is returned without `to_dict()`); `GET /users/get` answers 400 for a missing user; `GET /auditlog/list` returns 422 on a default request (`Query("")` on a datetime). Error bodies are `{code,msg,data}` while the docs declare `{detail:[...]}`.
 Library gap fixed: a login **username** (e.g. `admin`) is no longer treated as a secret, so spec examples that use it are not rejected as "credentials in case"; only password/token/secret-like login fields are.
 Still open: baseline gen builds update/delete happy cases from spec-example ids and `admin` values, which are dangerous against a live admin account (the agents removed 42 by hand); re-running `gen.sh` overwrites hand edits to baseline cases.
+
+
+### Round 4: `/ghost-api` with the registered subagents on six more slugs
+
+The command and its five subagents (contract-keeper, case-writer, case-validator, failure-explainer, report-writer) ran for `usersa`, `fcba`, `fsfta`, `seca`, `biga` and `jta`, with fix loops where the validator asked for them. The validators' semantic reviews found problems the mechanical validation cannot, and the recurring ones became library fixes:
+
+- Baseline cases for **public routes** (the contract says `auth: none` while other routes need auth) no longer include missing/bad-auth cases (about 100 of 251 FileCodeBox baselines were wrong).
+- **Destructive cases never carry seed ids** (`user_id=1` in a query or body); a delete/update of a seeded record is never a happy case. Previously a failed-open auth check on `DELETE ...?user_id=1` would have removed the admin.
+- Category ranges fit real apps: bad credentials answer 400 or 423, duplicates 400, a missing required token 422.
+- A contract with `"status": "unknown"` or an `unexpected` entry in another shape no longer crashes `gen`/`exec`.
+- Ids stay unique (agent cases that reused a baseline id are renamed; duplicates are flagged), and each case uses the capture made by its own setup.
+- A Docker connection-refused run now says to start the API with `--host 0.0.0.0`.
+- The web form accepts a sign-in request and credentials in the URL, like `api.toml`.
+
+New findings in the targets: FileCodeBox answers 500 for `chunk_size=0`, an oversized `expire_value` and an oversized id in batch-delete, and accepts `file_size=-1`; full-stack-fastapi-template answers 500 for a huge or negative `skip`; FastAPI-Template answers 500 on `GET /menu/get` and 422 on a default `GET /auditlog/list`; fastapi-users logout answers 204 where the spec says 200.

@@ -21,6 +21,26 @@
     <label for="headers">Headers for authentication (one <code>Name: value</code> per line)</label>
     <textarea id="headers" name="headers" placeholder="Authorization: Bearer &lt;token&gt;"></textarea>
     <p class="muted">Stored encrypted. Only the header names are shown after saving.</p>
+    <details>
+      <summary>More ways to sign in (optional)</summary>
+      <label for="query_auth">Credentials carried in the URL (one <code>name: value</code> per line, e.g. <code>token: abc</code>)</label>
+      <textarea id="query_auth" name="query_auth"></textarea>
+      <label for="login_path">Sign-in request: path (Ghost signs in once per run and sends the token)</label>
+      <input id="login_path" name="login_path" type="text" placeholder="/api/v1/login/access-token">
+      <label for="login_as">Sent as</label>
+      <select id="login_as" name="login_as"><option value="form">form fields</option><option value="json">JSON</option></select>
+      <label for="login_fields">Sign-in fields (<code>name: value</code> per line; <code>user.email</code> builds nested JSON)</label>
+      <textarea id="login_fields" name="login_fields" placeholder="username: me@example.com&#10;password: secret"></textarea>
+      <label for="login_extra">Fixed extra fields (optional, e.g. <code>scope: me items</code>)</label>
+      <textarea id="login_extra" name="login_extra"></textarea>
+      <label for="login_token_path">Where the token is in the reply (dotted path)</label>
+      <input id="login_token_path" name="login_token_path" type="text" value="access_token">
+      <label for="login_header">Send the token in header</label>
+      <input id="login_header" name="login_header" type="text" value="Authorization">
+      <label for="login_prefix">Header prefix</label>
+      <input id="login_prefix" name="login_prefix" type="text" value="Bearer ">
+      <p class="muted">Stored encrypted. Only names are shown after saving.</p>
+    </details>
     <label for="source_path">Source code folder (optional)</label>
     <input id="source_path" name="source_path" type="text" placeholder="my-app (inside the mounted sources folder)">
     <p class="muted">Lets the report show where in your code each error is raised. Read-only; Ghost never changes your code.</p>

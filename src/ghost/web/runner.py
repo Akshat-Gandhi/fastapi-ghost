@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from .. import workspace
 from ..pipeline import run_pipeline
 from .db import Project, Run, utcnow
-from .security import decrypt_headers
+from .security import decrypt_headers, decrypt_json
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
@@ -54,6 +54,8 @@ def execute_run(factory: sessionmaker, run_id: int) -> None:
                 samples=project.samples,
                 source_root=resolve_source(project.source_path),
                 auth_values=decrypt_headers(project.headers_enc),
+                auth_query_values=decrypt_headers(project.query_enc),
+                login=decrypt_json(project.login_enc) or None,
                 # Ticking "allow writes" in the UI is the explicit consent for this host.
                 allowed_hosts=[host] if project.allow_writes else [],
             )
@@ -64,6 +66,9 @@ def execute_run(factory: sessionmaker, run_id: int) -> None:
         except Exception as exc:  # report the failure on the run instead of losing it
             run.status = "failed"
             message = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, httpx.ConnectError) and resolve_url(project.base_url) != project.base_url:
+                message += (" (Ghost runs in Docker and reached your machine as host.docker.internal; "
+                            "start your API with --host 0.0.0.0 so it accepts connections from the container)")
             run.error = workspace.scrub_secrets(message, cfg) if cfg else message
         finally:
             workspace.clear_override(slug)
