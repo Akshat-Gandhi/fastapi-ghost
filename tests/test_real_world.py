@@ -373,3 +373,35 @@ def test_unknown_status_in_contract_does_not_break_later_stages():
     from ghost.gen import baseline_cases
     entry = {"expected": [{"status": 200}, {"status": "unknown"}], "request_example": None}
     assert baseline_cases(ep(secured=True), entry, {}, True)
+
+
+def test_gen_renames_agent_cases_that_reuse_a_baseline_id_and_validate_flags_duplicates(env_bundle):
+    import json as _json
+    from ghost.gen import run_gen
+    from ghost.validate import run_validate
+    path = workspace.api_dir("todo") / "cases" / "get_boom.json"
+    data = _json.loads(path.read_text())
+    clash = {**data["cases"][0], "origin": "agent", "title": "mine"}
+    data["cases"].append(clash)
+    path.write_text(_json.dumps(data))
+    run_validate("todo")
+    v = _json.loads((workspace.api_dir("todo") / "validation.json").read_text())["cases"]
+    assert v[clash["id"]]["verdict"] == "fix" and "duplicate_id" in v[clash["id"]]["problems"]
+    run_gen("todo")
+    ids = [c["id"] for c in _json.loads(path.read_text())["cases"]]
+    assert len(ids) == len(set(ids)) and any(i.endswith(".a1") for i in ids)
+
+
+def test_cases_use_the_capture_of_their_own_setup_not_the_latest_one():
+    from ghost.runner import RunContext
+    from ghost.runner import _record_state
+
+    class R:
+        def __init__(self, body): self._b = body
+        def json(self): return self._b
+
+    ctx = RunContext()
+    _record_state({"id": "a", "captures": {"slug": "s"}}, R({"s": "first"}), ctx)
+    _record_state({"id": "b", "captures": {"slug": "s"}}, R({"s": "second"}), ctx)
+    assert ctx.values["slug"] == "second"
+    assert ctx.by_case["a"] == {"slug": "first"} and ctx.by_case["b"] == {"slug": "second"}
