@@ -56,6 +56,7 @@ class ApiConfig:
     max_requests: int = 2000
     auth: dict[str, str] = field(default_factory=dict)  # header name -> ENV VAR NAME
     auth_query: dict[str, str] = field(default_factory=dict)  # query parameter name -> ENV VAR NAME (token in the URL)
+    auth_query_values: dict[str, str] = field(default_factory=dict)  # same, literal values (web app, memory only)
     allowed_hosts: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
     public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
@@ -73,7 +74,7 @@ class ApiConfig:
         return list(dict.fromkeys([*self.auth, *self.auth_values, *login]))
 
     def has_auth(self) -> bool:
-        return bool(self.auth or self.auth_values or self.login or self.auth_query)
+        return bool(self.auth or self.auth_values or self.login or self.auth_query or self.auth_query_values)
 
     def host_allowed(self) -> bool:
         """Writes only run against local hosts or hosts explicitly allowed."""
@@ -93,6 +94,7 @@ def set_override(api: str, cfg: ApiConfig) -> None:
 
 def clear_override(api: str) -> None:
     _OVERRIDES.pop(api, None)
+    _SESSION_AUTH.pop(api, None)  # a sign-in token must not outlive the run that made it
 
 
 # Servers (uvicorn) close idle keep-alive connections after 5 s. Reusing one just as it closes resets a write that
@@ -242,10 +244,15 @@ def resolve_auth(cfg: ApiConfig, mode: str) -> dict[str, str]:
 def resolve_auth_query(cfg: ApiConfig, mode: str) -> dict[str, str]:
     """Query parameters that carry credentials, per auth mode (none: left out; bad: a wrong value)."""
     if mode == "valid":
-        return {n: v for n, env in cfg.auth_query.items() if (v := os.environ.get(env))}
+        return {**cfg.auth_query_values, **{n: v for n, env in cfg.auth_query.items() if (v := os.environ.get(env))}}
     if mode == "bad":
-        return {n: INVALID_TOKEN for n in cfg.auth_query}
+        return {n: INVALID_TOKEN for n in [*cfg.auth_query, *cfg.auth_query_values]}
     return {}
+
+
+def _login_literals(cfg: ApiConfig) -> list[str]:
+    secretish = ("pass", "secret", "token", "key", "pwd")
+    return [v for f, v in ((cfg.login or {}).get("values") or {}).items() if v and any(w in f.lower() for w in secretish)]
 
 
 def secret_values(cfg: ApiConfig) -> list[str]:
@@ -254,7 +261,7 @@ def secret_values(cfg: ApiConfig) -> list[str]:
     secretish = ("pass", "secret", "token", "key", "pwd")
     login = [v for f, env in (cfg.login or {}).get("fields", {}).items()
              if any(w in f.lower() for w in secretish) and (v := os.environ.get(env))]
-    return [*(v for env in [*cfg.auth.values(), *cfg.auth_query.values()] if (v := os.environ.get(env))), *cfg.auth_values.values(), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
+    return [*(v for env in [*cfg.auth.values(), *cfg.auth_query.values()] if (v := os.environ.get(env))), *cfg.auth_values.values(), *cfg.auth_query_values.values(), *_login_literals(cfg), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
 
 
 def scrub_secrets(text: str, cfg: ApiConfig) -> str:

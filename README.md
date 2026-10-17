@@ -17,7 +17,7 @@ On a brand-new install the only account is `admin` / `admin`, and you are sent t
 
 Everything persists in Docker volumes (`ghost_pgdata` for Postgres, `ghost_data` for per-project workspaces and the encryption key). The UI is bound to `127.0.0.1` only.
 
-To enroll a project, give it a name and a server URL, plus any headers needed for auth (`Authorization: Bearer ...`). Headers are stored encrypted and only their names are shown again. A `localhost` URL is routed to your machine from inside Docker, **but your API must listen on `0.0.0.0`**, not `127.0.0.1`, for the container to reach it:
+To enroll a project, give it a name and a server URL, plus any headers needed for auth (`Authorization: Bearer ...`). Under *More ways to sign in* you can also describe a sign-in request (path, fields, where the token is in the reply) or credentials carried in the URL. All of it is stored encrypted, only names are shown again, and a sign-in token lives in memory for one run. A `localhost` URL is routed to your machine from inside Docker, **but your API must listen on `0.0.0.0`**, not `127.0.0.1`, for the container to reach it:
 
 ```bash
 uvicorn myapp:app --host 0.0.0.0 --port 8000

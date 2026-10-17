@@ -30,7 +30,9 @@ def ensure_login(api: str, client: httpx.Client) -> bool:
         return False
     payload: dict = dict(spec.get("extra", {}))
     for field, env in spec["fields"].items():
-        value = os.environ.get(env)
+        value = (spec.get("values") or {}).get(field)  # literal values exist only for the web app, in memory
+        if value is None:
+            value = os.environ.get(env)
         if value is None:
             raise ValueError(f"[login] needs the environment variable {env} (for field '{field}'), but it is not set.")
         node = payload  # "user.email" builds {"user": {"email": ...}} for APIs that wrap their bodies
@@ -54,5 +56,8 @@ def ensure_login(api: str, client: httpx.Client) -> bool:
             f"[login] the reply from {spec['path']} has no text value at '{spec['token_path']}'. "
             "Set token_path to where the token is in the JSON reply."
         )
-    workspace._SESSION_AUTH[api] = {spec["header"]: f"{spec['prefix']}{token}"}
+    header = {spec["header"]: f"{spec['prefix']}{token}"}
+    workspace._SESSION_AUTH[api] = header
+    if api in workspace._OVERRIDES:  # the web app's in-memory config is returned as is by load_config
+        workspace._OVERRIDES[api].auth_values.update(header)
     return True

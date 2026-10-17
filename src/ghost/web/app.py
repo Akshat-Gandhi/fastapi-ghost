@@ -17,7 +17,7 @@ from . import accounts
 from .db import Project, Run, User, UserSession, ensure_admin, make_session_factory, utcnow
 from .runner import execute_run
 from .security import (
-    decrypt_headers, encrypt_headers, hash_password, hash_token,
+    build_login, decrypt_headers, decrypt_json, encrypt_headers, encrypt_json, hash_password, hash_token,
     new_session_token, parse_headers, verify_password,
 )
 
@@ -251,6 +251,14 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         headers: str = Form(""),
         samples: int = Form(5),
         source_path: str = Form(""),
+        query_auth: str = Form(""),
+        login_path: str = Form(""),
+        login_as: str = Form("form"),
+        login_fields: str = Form(""),
+        login_extra: str = Form(""),
+        login_token_path: str = Form("access_token"),
+        login_header: str = Form("Authorization"),
+        login_prefix: str = Form("Bearer "),
         allow_writes: str | None = Form(None),
         user: User = Depends(require_user),
         db: Session = Depends(get_db),
@@ -268,6 +276,9 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
             headers_enc=encrypt_headers(parse_headers(headers)),
             allow_writes=allow_writes is not None, samples=max(1, min(samples, 50)),
             source_path=source_path.strip(),
+            query_enc=encrypt_headers(parse_headers(query_auth)),
+            login_enc=encrypt_json(build_login(login_path, login_as, login_fields, login_extra,
+                                               login_token_path, login_header, login_prefix)),
         )
         db.add(project)
         db.commit()
@@ -279,8 +290,12 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
     ):
         project = own_project(project_id, db, user)
         header_names = list(decrypt_headers(project.headers_enc))
+        login = decrypt_json(project.login_enc)
         return templates.TemplateResponse(
-            request, "project.html", {"user": user, "project": project, "header_names": header_names}
+            request, "project.html",
+            {"user": user, "project": project, "header_names": header_names,
+             "query_names": list(decrypt_headers(project.query_enc)),
+             "login_path": login.get("path") if login else None},
         )
 
     @app.post("/projects/{project_id}/run")

@@ -45,6 +45,8 @@ class Project(Base):
     allow_writes: Mapped[bool] = mapped_column(Boolean, default=False)
     samples: Mapped[int] = mapped_column(Integer, default=5)
     source_path: Mapped[str] = mapped_column(String(500), default="")  # optional: app source, for raise sites
+    login_enc: Mapped[str] = mapped_column(Text, default="")  # encrypted JSON: optional sign-in call
+    query_enc: Mapped[str] = mapped_column(Text, default="")  # encrypted JSON: credentials carried in the URL
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     user: Mapped[User] = relationship(back_populates="projects")
     runs: Mapped[list["Run"]] = relationship(
@@ -96,9 +98,12 @@ def _migrate(engine) -> None:
 
 def _migrate_projects(engine) -> None:
     columns = {c["name"] for c in inspect(engine).get_columns("projects")}
-    if "source_path" not in columns:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        if "source_path" not in columns:
             conn.execute(text("ALTER TABLE projects ADD COLUMN source_path VARCHAR(500) NOT NULL DEFAULT ''"))
+        for name in ("login_enc", "query_enc"):
+            if name not in columns:
+                conn.execute(text(f"ALTER TABLE projects ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"))
 
 
 def ensure_admin(factory: sessionmaker) -> bool:
