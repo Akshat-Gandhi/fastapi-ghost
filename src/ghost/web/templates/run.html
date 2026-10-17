@@ -48,7 +48,7 @@
   {% else %}<li class="muted">No cases ran for this endpoint.</li>{% endfor %}</ul>
   {% if e.error_responses %}<strong>What the client sees on errors</strong>
   <ul>{% for er in e.error_responses %}
-    <li><span class="code">{{ er.status }}</span>{% if er.internal_raise_site %} <span class="muted">raised at {{ er.internal_raise_site }}</span>{% endif %}
+    <li><span class="code">{{ er.status }}</span>{% if er.internal_raise_site %} <span class="muted">raised at {{ er.internal_raise_site }}{% if er.internal_raise_via %} via {{ er.internal_raise_via|join(" -> ") }}{% endif %}</span>{% endif %}
       <div class="code muted">{{ er.body|tojson }}</div></li>{% endfor %}</ul>{% endif %}
 </details>
 {% endfor %}
