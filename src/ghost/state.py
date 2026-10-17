@@ -110,7 +110,7 @@ def _string_option(sub: dict, spec: dict) -> dict | None:
     return sub if t == "string" else None
 
 
-def unique_string(sub: dict, spec: dict) -> str | None:
+def unique_string(sub: dict, spec: dict, salt: str = "") -> str | None:
     """A template like `ghost-{{nonce}}` that still satisfies the string schema, or None if unsafe to change."""
     s = _string_option(sub, spec)
     if s is None or any(k in s for k in ("enum", "const", "pattern")):
@@ -120,7 +120,7 @@ def unique_string(sub: dict, spec: dict) -> str | None:
         return None
     suffix = "@example.com" if fmt == "email" else ""
     lo, hi = s.get("minLength"), s.get("maxLength")
-    prefix, width = "ghost-", NONCE_LEN
+    prefix, width = (f"gh{salt}-" if salt else "ghost-"), NONCE_LEN
     if hi is not None:
         room = hi - len(suffix)
         if room < 1:
@@ -138,7 +138,7 @@ def unique_string(sub: dict, spec: dict) -> str | None:
     return prefix + tag + suffix
 
 
-def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0) -> Any:
+def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0, salt: str = "") -> Any:
     """Copy of `example` where likely-unique string fields carry a nonce template."""
     if schema is None or depth > 4:
         return copy.deepcopy(example)
@@ -152,13 +152,13 @@ def uniquify(example: Any, schema: dict | None, spec: dict, depth: int = 0) -> A
             if sub is None:
                 out[name] = copy.deepcopy(val)
             elif isinstance(val, str) and _is_unique_name(name):
-                out[name] = unique_string(sub, spec) or val
+                out[name] = unique_string(sub, spec, salt) or val
             else:
-                out[name] = uniquify(val, sub, spec, depth + 1)
+                out[name] = uniquify(val, sub, spec, depth + 1, salt)
         return out
     if isinstance(example, list):
         item = deref(schema.get("items", {}), spec)
-        return [uniquify(v, item, spec, depth + 1) for v in example]
+        return [uniquify(v, item, spec, depth + 1, salt) for v in example]
     return copy.deepcopy(example)
 
 

@@ -23,3 +23,10 @@ If a stage fails it writes `{"stage":..., "error":...}`; report it, let later st
 
 ## Finish
 Show the path to `.ghost/$ARGUMENTS/report.md` and a 5-line summary (endpoints, cases run, flags by type, drift counts, degraded stages). Use non-blocking language. Never print token values.
+
+## Practical notes (from running this on real projects)
+- Paths like `.claude/skills/...` are relative to the repository that holds `.claude`; `.ghost/` lives under `GHOST_HOME` (default: the current directory). Run the scripts by absolute path and set `GHOST_HOME` and `GHOST_BIN` (the `ghost` executable to use) when the two are in different places.
+- A "fix loop" is one round of: writer edits the listed `fix` cases, then the validator re-validates. At most 2 rounds; edits you make before the first `ghost validate` do not count.
+- Multipart/file-upload bodies are not supported yet; such endpoints only get null-body cases.
+- If the API's real code lives in a library outside `source_root`, `scan` finds no raise sites; read the library source and fill `contract.json` by hand (the contract-keeper does this).
+- `ghost scan` prints a warning (and writes `unparsed_files`) when it could not read some source files, e.g. newer Python syntax than the interpreter running Ghost.

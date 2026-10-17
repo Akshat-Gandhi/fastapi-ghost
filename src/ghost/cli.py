@@ -100,6 +100,10 @@ def scan(api: str = typer.Option(..., help="API name from `ghost init`.")) -> No
     from .scan import run_scan
     sites = _guard(lambda: run_scan(api))
     typer.echo(f"Found {len(sites)} raise sites -> {workspace.api_dir(api)}/source_errors.json")
+    skipped = (workspace.read_json(api, "source_errors.json", {}) or {}).get("unparsed_files")
+    if skipped:
+        typer.secho(f"Warning: {len(skipped)} source file(s) could not be read by this Python (newer syntax?), "
+                    f"so raises in them are not listed: {', '.join(skipped[:5])}", fg="yellow", err=True)
 
 
 @app.command()

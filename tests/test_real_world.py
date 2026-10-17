@@ -304,3 +304,56 @@ def test_dropping_connections_never_raises_on_any_client():
     client = httpx.Client()
     _drop_connections(client)
     client.close()
+
+
+# --- gaps the agent runs exposed ---------------------------------------------------------------
+
+def mk(method, path, secured=False, form=False):
+    return Endpoint(method=method, path=path, summary="", params=[], body_schema=None, body_required=False,
+                    declared_codes=[], secured=secured, body_format="form" if form else "json")
+
+
+def test_endpoint_without_security_is_public_when_others_are_secured():
+    from ghost.gen import open_by_spec
+    eps = [mk("POST", "/login"), mk("GET", "/me", secured=True)]
+    assert open_by_spec(eps[0], eps) and not open_by_spec(eps[1], eps)
+    assert not open_by_spec(eps[0], [eps[0]])  # nothing declares security: no conclusion
+
+
+def test_form_bodies_get_no_wrong_type_cases():
+    from ghost.schema import mutate_invalid
+    schema = {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}
+    assert any("wrong type" in d for d, _ in mutate_invalid(schema, {"n": 1}, {}))
+    assert not any("wrong type" in d for d, _ in mutate_invalid(schema, {"n": 1}, {}, form=True))
+
+
+def test_unique_values_differ_between_operations():
+    from ghost.state import unique_string
+    sub = {"type": "string", "format": "email"}
+    assert unique_string(sub, {}, "0a1") != unique_string(sub, {}, "0b2")
+    assert unique_string(sub, {}).startswith("ghost-")
+
+
+def test_editing_the_signed_in_account_gets_no_happy_case():
+    from ghost.gen import baseline_cases
+    entry = {"expected": [{"status": 200}], "request_example": None}
+    kinds = lambda e, auth: [c["category"] for c in baseline_cases(e, entry, {}, auth)]
+    assert "happy" not in kinds(mk("PATCH", "/users/me", secured=True), True)
+    assert "happy" in kinds(mk("PATCH", "/users/{id}", secured=True), True)
+
+
+def test_report_separates_docs_from_code_only_statuses():
+    entry = {"expected": [{"status": 200, "source": "spec"}, {"status": 401, "source": "code"}]}
+    in_docs = {e["status"] for e in entry["expected"] if e.get("source") == "spec"}
+    assert in_docs == {200}
+
+
+def test_scan_lists_files_it_could_not_read(home, tmp_path):
+    from ghost.scan import run_scan
+    src = tmp_path / "app"
+    src.mkdir()
+    (src / "ok.py").write_text("x = 1\n")
+    (src / "bad.py").write_text("def broken(:\n")
+    workspace.write_default_config("s", "http://localhost:1", str(src), False)
+    run_scan("s")
+    assert workspace.read_json("s", "source_errors.json")["unparsed_files"] == ["bad.py"]

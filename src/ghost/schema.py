@@ -128,7 +128,7 @@ _WRONG = {"string": 12345, "integer": "not-a-number", "number": "not-a-number", 
           "array": "not-a-list", "object": "not-an-object"}
 
 
-def mutate_invalid(schema: dict, example: Any, spec: dict) -> list[tuple[str, Any]]:
+def mutate_invalid(schema: dict, example: Any, spec: dict, form: bool = False) -> list[tuple[str, Any]]:
     """Payloads that break the schema in exactly one way. Callers still verify with jsonschema."""
     schema = deref(schema, spec)
     if "allOf" in schema:
@@ -147,7 +147,7 @@ def mutate_invalid(schema: dict, example: Any, spec: dict) -> list[tuple[str, An
         t = sub.get("type")
         if isinstance(t, list):
             t = next((x for x in t if x != "null"), None)
-        if t in _WRONG and "anyOf" not in sub and "oneOf" not in sub:
+        if t in _WRONG and not form and "anyOf" not in sub and "oneOf" not in sub:  # a form carries only text
             out.append((f"wrong type for '{name}' (expected {t})", {**example, name: _WRONG[t]}))
         if t in ("integer", "number") and "minimum" in sub:
             out.append((f"'{name}' below minimum", {**example, name: sub["minimum"] - 1}))
