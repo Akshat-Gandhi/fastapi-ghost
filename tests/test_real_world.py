@@ -365,3 +365,11 @@ def test_login_username_is_not_a_secret_but_password_is(home, monkeypatch):
     write_login("sv")
     secrets = workspace.secret_values(workspace.load_config("sv"))
     assert "AdminPass123" in secrets and "admin" not in secrets
+
+
+def test_unknown_status_in_contract_does_not_break_later_stages():
+    from ghost.contract import statuses
+    assert statuses([{"status": 200}, {"status": "unknown"}, {"status": "404"}, {"status": None}, {"status": True}]) == [200, 404]
+    from ghost.gen import baseline_cases
+    entry = {"expected": [{"status": 200}, {"status": "unknown"}], "request_example": None}
+    assert baseline_cases(ep(secured=True), entry, {}, True)

@@ -6,7 +6,7 @@ import zlib
 from typing import Any
 
 from . import workspace
-from .contract import key_of
+from .contract import key_of, statuses
 from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .probe import _sample_value
 from .schema import deref, example_from_schema, mutate_invalid
@@ -77,7 +77,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False
     auth = "valid" if (ep.secured or has_auth) else "none"
     base = {"path_params": _path_params(ep, spec), "query": _query(ep, spec), "headers": {},
             "body": example, "auth": auth}
-    expected_codes = [e["status"] for e in entry["expected"]]
+    expected_codes = statuses(entry["expected"])
     success = [c for c in expected_codes if 200 <= c < 300] or [200]
 
     happy_req = dict(base)
