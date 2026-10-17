@@ -41,8 +41,9 @@ Any case that creates/changes/deletes data is `destructive: true`. Do not includ
 |---|---|
 | happy | 2xx |
 | invalid_payload | 400 or 422 |
-| missing_auth, bad_auth | 401 or 403 |
+| missing_auth | 400, 401, 403 or 422 (a required token missing) |
+| bad_auth | 400, 401, 403 or 423 |
 | not_found | 404 |
-| conflict | 409 |
+| conflict | 400 or 409 |
 
 Reason code `expected_status_does_not_match_category` means the case's `expect.status` is outside this table: change the category, not the status.

@@ -405,3 +405,10 @@ def test_cases_use_the_capture_of_their_own_setup_not_the_latest_one():
     _record_state({"id": "b", "captures": {"slug": "s"}}, R({"s": "second"}), ctx)
     assert ctx.values["slug"] == "second"
     assert ctx.by_case["a"] == {"slug": "first"} and ctx.by_case["b"] == {"slug": "second"}
+
+
+def test_category_ranges_fit_apps_that_answer_400_or_422_for_auth_and_duplicates():
+    from ghost.validate import _EXPECT_RANGES as R
+    assert R["missing_auth"](422) and R["missing_auth"](401) and not R["missing_auth"](200)
+    assert R["bad_auth"](400) and R["bad_auth"](423) and not R["bad_auth"](404)
+    assert R["conflict"](400) and R["conflict"](409) and not R["conflict"](404)
