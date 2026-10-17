@@ -59,10 +59,17 @@ def build_contract(
                 continue
             entry = {
                 "status": site.status_code, "source": "code",
-                "error_body_shape": {"detail": site.detail if site.detail is not None else "unknown"},
+                "error_body_shape": "unknown" if site.handler else
+                {"detail": site.detail if site.detail is not None else "unknown"},
                 "raise_site": f"{site.file}:{site.line}",
+                "raise_via": list(site.via),
+                "raise_confidence": site.confidence or "direct",
                 "undeclared_in_spec": site.status_code not in declared,
             }
+            if site.exception:
+                entry["raise_exception"] = site.exception
+            if site.handler:
+                entry["raise_handler"] = site.handler
             if site.detail and not site.detail.startswith(("f'", 'f"')) and site.detail.isascii():
                 entry["detail_is_literal"] = site.detail == str(site.detail)
             expected.append(entry)
@@ -161,7 +168,7 @@ def run_contract(api: str) -> tuple[dict, list[dict]]:
     endpoints = load_endpoints(api)
     spec = load_spec(api)
     sites_raw = workspace.read_json(api, "source_errors.json", {"sites": []})["sites"]
-    sites = [RaiseSite(**{**s, "route": tuple(s["route"]) if s["route"] else None}) for s in sites_raw]
+    sites = [RaiseSite.from_dict(s) for s in sites_raw]
     mapped = map_sites_to_endpoints(sites, endpoints)
     previous = workspace.read_json(api, "contract.json", {}) or {}
     previous = {k: v for k, v in previous.items() if k != "schema_version"}

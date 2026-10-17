@@ -142,13 +142,15 @@ def build_report(api: str) -> dict:
             flags.append("DRIFT")
         if any(r["outcome"] in ("mismatch", "error") for r in mine):
             flags.append("CASE_FAILED")
-        raise_sites = {e["status"]: e["raise_site"] for e in expected if e.get("raise_site")}
+        raise_sites = {e["status"]: e for e in expected if e.get("raise_site")}
         error_responses = []
         for r in mine:
             if r["status"] is not None and r["status"] >= 400:
                 error_responses.append({
                     "case_id": r["case_id"], "status": r["status"], "body": r["body"],
-                    "internal_raise_site": raise_sites.get(r["status"]),
+                    "internal_raise_site": (raise_sites.get(r["status"]) or {}).get("raise_site"),
+                    "internal_raise_via": (raise_sites.get(r["status"]) or {}).get("raise_via") or [],
+                    "internal_raise_confidence": (raise_sites.get(r["status"]) or {}).get("raise_confidence"),
                 })
         endpoints.append({
             "method": ep.method, "path": ep.path, "operation_id": operation_id(ep),
@@ -194,7 +196,8 @@ def render_markdown(rep: dict) -> str:
         if e["error_responses"]:
             lines += ["", "What the client sees on errors:", ""]
             for er in e["error_responses"]:
-                site = f" (raised at `{er['internal_raise_site']}`)" if er["internal_raise_site"] else ""
+                via = " via " + " -> ".join(er.get("internal_raise_via") or []) if er.get("internal_raise_via") else ""
+                site = f" (raised at `{er['internal_raise_site']}`{via})" if er["internal_raise_site"] else ""
                 lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'])[:300]}`")
         for cid, ex in e["explanations"].items():
             if isinstance(ex, dict):
