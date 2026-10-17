@@ -99,3 +99,28 @@ def scan(api: str = typer.Option(..., help="API name from `ghost init`.")) -> No
     from .scan import run_scan
     sites = _guard(lambda: run_scan(api))
     typer.echo(f"Found {len(sites)} raise sites -> {workspace.api_dir(api)}/source_errors.json")
+
+
+@app.command()
+def contract(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S3: build contract.json and drift.json from the spec and source scan."""
+    from .contract import run_contract
+    contract_, drift = _guard(lambda: run_contract(api))
+    breaking = sum(1 for d in drift if d["severity"] == "breaking")
+    typer.echo(f"Contract for {len(contract_)} endpoints; drift: {len(drift)} changes ({breaking} breaking)")
+
+
+@app.command()
+def gen(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S4: generate baseline test cases into cases/."""
+    from .gen import run_gen
+    total = _guard(lambda: run_gen(api))
+    typer.echo(f"Generated {total} baseline cases -> {workspace.api_dir(api)}/cases/")
+
+
+@app.command()
+def validate(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
+    """S5: statically validate cases; only verdict `ok` cases will run."""
+    from .validate import run_validate
+    result = _guard(lambda: run_validate(api))
+    typer.echo(f"Validation: {result['summary']}")
