@@ -1,6 +1,8 @@
 # Validation checklist
 
-Output: `.ghost/<api>/validation.json` with a verdict per case (`ok|fix|drop`), a reason for non-ok, and an overall verdict (`ok` when no case needs `fix`).
+Output: `.ghost/<api>/validation.json`: `cases.<id>.verdict` (`ok|fix|drop`) with `problems`/`warnings`, plus a `summary` count. Semantic judgements go in `validation_review.json` (stricter only) and are merged by re-running `ghost validate`.
+
+Mechanical problem codes: `unknown_category`, `bad_expected_status`, `expected_status_does_not_match_category`, `destructive_mislabelled`, `writes_disabled`, `host_not_allowed_for_writes`, `blocked_path`, `missing_path_params:*`, `unknown_path_params:*`, `credentials_in_case`, `happy_body_violates_schema`, `invalid_case_body_is_valid`, `duplicate`. `writes_disabled`, `host_not_allowed_for_writes`, `blocked_path` and `duplicate` mean `drop`; the rest mean `fix`.
 
 ## Structure (mechanical)
 - [ ] Valid JSON, `schema_version` is 1.

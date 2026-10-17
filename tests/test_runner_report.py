@@ -182,3 +182,31 @@ def test_validator_rejects_literal_credentials(env):
     v = run_validate("todo")["cases"]["get_echo.happy.1"]
     assert v["verdict"] == "fix" and "credentials_in_case" in v["problems"]
     assert not any(r["case_id"] == "get_echo.happy.1" for r in run_all("todo", env))
+
+
+def test_review_can_tighten_but_not_loosen(env):
+    review = {"cases": {
+        "get_todos_todo_id.happy.1": {"verdict": "fix", "reason": "id 1 may not exist"},
+        "post_todos.happy.1": {"verdict": "ok", "reason": "try to loosen"},
+    }}
+    workspace.write_json("todo", "validation_review.json", review)
+    p = workspace.api_dir("todo") / "api.toml"
+    p.write_text(p.read_text().replace("allow_writes = true", "allow_writes = false"))
+    v = run_validate("todo")["cases"]
+    assert v["get_todos_todo_id.happy.1"]["verdict"] == "fix"
+    assert any(x.startswith("review:") for x in v["get_todos_todo_id.happy.1"]["problems"])
+    assert v["post_todos.happy.1"]["verdict"] == "drop"  # writes disabled stays dropped
+    ran = {r["case_id"] for r in run_all("todo", env)}
+    assert "get_todos_todo_id.happy.1" not in ran
+
+
+def test_report_reads_agent_explanations(env):
+    run_all("todo", env)
+    workspace.write_json("todo", "explanations.json", {"explanations": [{
+        "case_id": "get_boom.happy.1", "class": "API bug", "hypothesis": "handler raises 500", "confidence": "high",
+        "location": "app.py:9", "fix": "return a 4xx", "user_sees": {"status": 500}}]})
+    rep = write_report("todo")
+    boom = next(e for e in rep["endpoints"] if e["path"] == "/boom")
+    assert boom["explanations"]["get_boom.happy.1"]["class"] == "API bug"
+    md = (workspace.api_dir("todo") / "report.md").read_text()
+    assert "API bug, high confidence" in md and "app.py:9" in md

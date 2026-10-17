@@ -97,7 +97,8 @@ def build_report(api: str) -> dict:
     contract = workspace.read_json(api, "contract.json", {})
     results = workspace.read_json(api, "results/results.json", {"results": []})["results"]
     drift = workspace.read_json(api, "drift.json", {"items": []})["items"]
-    explanations = workspace.read_json(api, "explanations.json", {"explanations": {}}).get("explanations", {})
+    raw = workspace.read_json(api, "explanations.json", {"explanations": []}).get("explanations", [])
+    explanations = {e["case_id"]: e for e in raw if isinstance(e, dict) and "case_id" in e} if isinstance(raw, list) else raw
     drifted = {d["where"] for d in drift}
     endpoints = []
     for ep in load_endpoints(api):
@@ -177,7 +178,12 @@ def render_markdown(rep: dict) -> str:
                 site = f" (raised at `{er['internal_raise_site']}`)" if er["internal_raise_site"] else ""
                 lines.append(f"- `{er['status']}`{site}: `{json.dumps(er['body'])[:300]}`")
         for cid, ex in e["explanations"].items():
-            lines.append(f"- Explanation for `{cid}`: {ex}")
+            if isinstance(ex, dict):
+                where = f" at `{ex['location']}`" if ex.get("location") else ""
+                lines.append(f"- Explanation for `{cid}` ({ex.get('class', 'unclassified')}, {ex.get('confidence', '?')} confidence){where}: "
+                             f"{ex.get('hypothesis', '')} Fix: {ex.get('fix', 'n/a')}")
+            else:
+                lines.append(f"- Explanation for `{cid}`: {ex}")
     return "\n".join(lines) + "\n"
 
 

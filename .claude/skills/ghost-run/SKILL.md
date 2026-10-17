@@ -6,7 +6,7 @@ description: Stage S6 of fastapi-ghost (script only, no agent). Use to execute v
 # ghost-run (S6)
 
 ## Steps
-1. Gate: read `.ghost/<api>/validation.json`. If the verdict is not `ok`, stop and report; do not run.
+1. Gate: read `.ghost/<api>/validation.json`. If `summary` has no `ok` cases, stop and report. The runner executes only cases whose verdict is `ok` and skips all others.
 2. Gate: check `api.toml`. Env var names for tokens must be set in the environment (do not print values). Writes run only if `allow_writes = true`.
 3. Run `bash .claude/skills/ghost-run/scripts/exec.sh <api>`.
 4. Read `.ghost/<api>/results/results.json` and give a count by status and by flag (see `references/flags.md`).
