@@ -7,8 +7,8 @@ description: Stage S5 of fastapi-ghost. Use to review generated cases before exe
 
 ## Steps
 1. Run `bash .claude/skills/ghost-validate/scripts/validate.sh <api>`. It does mechanical checks (schema, categories, known operations, destructive vs `allow_writes`) and writes `.ghost/<api>/validation.json`.
-2. Delegate to `case-validator` to judge semantics using `references/validation-checklist.md`. It marks every case `ok`, `fix` (with a reason the writer can act on) or `drop`.
-3. Overall verdict: `ok` only if no case is `fix`. Drops are fine.
+2. Delegate to `case-validator` to judge semantics using `references/validation-checklist.md`. It writes `validation_review.json` (stricter-only `fix`/`drop` verdicts with reasons) and re-runs `validate.sh` so they merge into `validation.json`.
+3. Only cases with verdict `ok` will run. `drop` cases are fine; `fix` cases are skipped until fixed.
 4. If `fix` cases exist, return them to `case-writer` (main session orchestrates). Re-validate. Maximum 2 rounds; after that, remaining `fix` cases are dropped and noted.
 5. S6 must not run unless the final verdict is `ok`.
 

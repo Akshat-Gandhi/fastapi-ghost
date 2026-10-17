@@ -4,7 +4,7 @@ Enforced in code by the runner, not by prompts. Agents and the main session must
 
 | Gate | Where configured | Behaviour |
 |---|---|---|
-| Validation verdict | `validation.json` | S6 never runs without verdict `ok` |
+| Validation verdict | `validation.json` | each case runs only with verdict `ok`; `fix` and `drop` cases are skipped |
 | Writes | `allow_writes` in `api.toml` (set at init with `--writes`) | default off; destructive cases are not sent when off |
 | Host | `allowed_hosts` | requests to other hosts refused |
 | Paths | `blocked_paths` | matching paths never requested |

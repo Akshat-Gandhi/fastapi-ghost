@@ -107,6 +107,14 @@ def run_validate(api: str) -> dict:
             seen.add(fingerprint)
             verdict = "ok" if not problems else ("drop" if set(problems) & HARD_DROP else "fix")
             verdicts[case["id"]] = {"verdict": verdict, "problems": problems, "warnings": warnings}
+    # The case-validator agent's semantic judgement. It may only make a verdict stricter, never loosen one.
+    review = workspace.read_json(api, "validation_review.json", {"cases": {}}).get("cases", {})
+    rank = {"ok": 0, "fix": 1, "drop": 2}
+    for cid, r in review.items():
+        mine = verdicts.get(cid)
+        if mine and r.get("verdict") in rank and rank[r["verdict"]] > rank[mine["verdict"]]:
+            mine["verdict"] = r["verdict"]
+            mine["problems"].append(f"review: {r.get('reason', 'no reason given')}")
     counts: dict[str, int] = {}
     for v in verdicts.values():
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1

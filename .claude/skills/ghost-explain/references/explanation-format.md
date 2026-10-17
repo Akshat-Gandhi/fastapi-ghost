@@ -1,6 +1,6 @@
 # explanations.json
 
-One entry per failing result, keyed by case or bundle id:
+A list with one entry per failing case; `case_id` links it to the report:
 
 ```json
 {"schema_version": 1, "explanations": [{
