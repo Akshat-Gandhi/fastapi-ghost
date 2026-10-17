@@ -21,6 +21,9 @@
     <label for="headers">Headers for authentication (one <code>Name: value</code> per line)</label>
     <textarea id="headers" name="headers" placeholder="Authorization: Bearer &lt;token&gt;"></textarea>
     <p class="muted">Stored encrypted. Only the header names are shown after saving.</p>
+    <label for="source_path">Source code folder (optional)</label>
+    <input id="source_path" name="source_path" type="text" placeholder="my-app (inside the mounted sources folder)">
+    <p class="muted">Lets the report show where in your code each error is raised. Read-only; Ghost never changes your code.</p>
     <label for="samples">Requests per endpoint (for latency)</label>
     <input id="samples" name="samples" type="number" value="5" min="1" max="50">
     <label><input type="checkbox" name="allow_writes" value="1" style="width:auto">

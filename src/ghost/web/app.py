@@ -250,6 +250,7 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
         base_url: str = Form(...),
         headers: str = Form(""),
         samples: int = Form(5),
+        source_path: str = Form(""),
         allow_writes: str | None = Form(None),
         user: User = Depends(require_user),
         db: Session = Depends(get_db),
@@ -266,6 +267,7 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
             user_id=user.id, name=name.strip() or base_url, base_url=base_url,
             headers_enc=encrypt_headers(parse_headers(headers)),
             allow_writes=allow_writes is not None, samples=max(1, min(samples, 50)),
+            source_path=source_path.strip(),
         )
         db.add(project)
         db.commit()

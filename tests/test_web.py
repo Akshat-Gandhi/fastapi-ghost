@@ -292,3 +292,31 @@ def test_old_instance_first_user_becomes_admin(tmp_path):
     with make_session_factory(url)() as db:
         assert db.query(User).filter_by(email="first@x.io").one().is_admin is True
         assert db.query(User).filter_by(email="second@x.io").one().is_admin is False
+
+
+def test_resolve_source_confined_to_mount(tmp_path, monkeypatch):
+    from ghost.web.runner import resolve_source
+    (tmp_path / "app").mkdir()
+    monkeypatch.setenv("GHOST_IN_DOCKER", "1")
+    monkeypatch.setenv("GHOST_SOURCES_DIR", str(tmp_path))
+    assert resolve_source("app") == (tmp_path / "app").resolve()
+    assert resolve_source("../etc") is None
+    assert resolve_source("missing") is None
+    assert resolve_source("") is None
+
+
+def test_project_saves_source_path(client):
+    register(client)
+    r = client.post("/projects", data={"name": "p", "base_url": "http://localhost:1", "source_path": " my-app "})
+    page = client.get(r.headers["location"])
+    assert "my-app" in page.text
+
+
+def test_old_projects_table_gets_source_path(tmp_path):
+    import sqlalchemy as sa
+    url = f"sqlite:///{tmp_path}/old3.db"
+    eng = sa.create_engine(url)
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE projects (id INTEGER PRIMARY KEY, user_id INTEGER, name VARCHAR(120), base_url VARCHAR(500), headers_enc TEXT, allow_writes BOOLEAN, samples INTEGER, created_at DATETIME)"))
+    make_session_factory(url)
+    assert "source_path" in {c["name"] for c in sa.inspect(sa.create_engine(url)).get_columns("projects")}

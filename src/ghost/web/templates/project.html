@@ -6,7 +6,7 @@
 <div class="card">
   <div><span class="muted">Server</span> <span class="code">{{ project.base_url }}</span></div>
   <div><span class="muted">Headers</span> {% if header_names %}{{ header_names|join(", ") }}{% else %}none{% endif %}</div>
-  <div><span class="muted">Writes</span> {{ "enabled" if project.allow_writes else "GET only" }} · <span class="muted">Samples</span> {{ project.samples }}</div>
+  <div><span class="muted">Writes</span> {{ "enabled" if project.allow_writes else "GET only" }} · <span class="muted">Samples</span> {{ project.samples }}{% if project.source_path %} · <span class="muted">Source</span> {{ project.source_path }}{% endif %}</div>
   <p>
     <form class="inline" method="post" action="/projects/{{ project.id }}/run"><button type="submit">Run now</button></form>
     <form class="inline" method="post" action="/projects/{{ project.id }}/delete"><button class="danger" type="submit">Delete</button></form>
