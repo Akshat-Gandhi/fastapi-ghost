@@ -249,7 +249,11 @@ def resolve_auth_query(cfg: ApiConfig, mode: str) -> dict[str, str]:
 
 
 def secret_values(cfg: ApiConfig) -> list[str]:
-    login = [v for env in (cfg.login or {}).get("fields", {}).values() if (v := os.environ.get(env))]
+    # Only password-like login fields are secrets. A username such as "admin" is an identifier that appears in
+    # spec examples and must not make every example case look like it leaks a credential.
+    secretish = ("pass", "secret", "token", "key", "pwd")
+    login = [v for f, env in (cfg.login or {}).get("fields", {}).items()
+             if any(w in f.lower() for w in secretish) and (v := os.environ.get(env))]
     return [*(v for env in [*cfg.auth.values(), *cfg.auth_query.values()] if (v := os.environ.get(env))), *cfg.auth_values.values(), *(v.rsplit(" ", 1)[-1] for v in cfg.auth_values.values()), *login]
 
 

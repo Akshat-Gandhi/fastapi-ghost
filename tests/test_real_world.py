@@ -357,3 +357,11 @@ def test_scan_lists_files_it_could_not_read(home, tmp_path):
     workspace.write_default_config("s", "http://localhost:1", str(src), False)
     run_scan("s")
     assert workspace.read_json("s", "source_errors.json")["unparsed_files"] == ["bad.py"]
+
+
+def test_login_username_is_not_a_secret_but_password_is(home, monkeypatch):
+    monkeypatch.setenv("T_U", "admin")
+    monkeypatch.setenv("T_P", "AdminPass123")
+    write_login("sv")
+    secrets = workspace.secret_values(workspace.load_config("sv"))
+    assert "AdminPass123" in secrets and "admin" not in secrets
