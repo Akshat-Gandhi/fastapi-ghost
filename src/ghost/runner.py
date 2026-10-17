@@ -112,8 +112,11 @@ def run_all(api: str, client: httpx.Client | None = None) -> list[dict]:
     own_client = client is None
     client = client or httpx.Client(timeout=cfg.timeout_s)
     results: list[dict] = []
+    # Reads first, then POST, PUT/PATCH, DELETE last, so a delete cannot remove data a later read needs.
+    order = {"GET": 0, "HEAD": 0, "OPTIONS": 0, "POST": 1, "PUT": 2, "PATCH": 2, "DELETE": 3}
+    files = sorted(load_case_files(api), key=lambda cf: order.get(cf["method"], 2))
     try:
-        for cf in load_case_files(api):
+        for cf in files:
             ep = by_op.get(cf["operation_id"])
             for case in cf["cases"]:
                 verdict = validation["cases"].get(case["id"], {}).get("verdict")
