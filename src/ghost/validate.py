@@ -12,6 +12,7 @@ from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .gen import CATEGORIES, SAFE_METHODS, load_case_files
 from .redact import SENSITIVE_HEADERS
 from .schema import with_components
+from .state import BUILTIN, CAPTURE_NAME, names_in, sample_nonce_only
 
 _EXPECT_RANGES = {
     "happy": lambda c: 200 <= c < 300,
@@ -22,7 +23,7 @@ _EXPECT_RANGES = {
     "conflict": lambda c: c == 409,
 }
 _AUTH_FOR = {"missing_auth": "none", "bad_auth": "bad"}
-HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate"}
+HARD_DROP = {"writes_disabled", "host_not_allowed_for_writes", "blocked_path", "duplicate", "teardown_not_allowed"}
 
 
 def conforms(payload: Any, schema: dict, spec: dict) -> bool:
@@ -79,14 +80,84 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         warnings.append("endpoint_is_secured_but_no_auth_configured")
 
     if ep.body_schema is not None and "body" in req:
-        ok = conforms(req["body"], ep.body_schema, spec)
-        if cat == "happy" and not ok:
-            problems.append("happy_body_violates_schema")
-        if cat == "invalid_payload" and ok:
-            problems.append("invalid_case_body_is_valid")
+        body, dynamic = sample_nonce_only(req["body"])  # {{nonce}} is checked as a stand-in of the same length
+        if dynamic:
+            warnings.append("body_uses_captured_values_not_schema_checked")
+        else:
+            ok = conforms(body, ep.body_schema, spec)
+            if cat == "happy" and not ok:
+                problems.append("happy_body_violates_schema")
+            if cat == "invalid_payload" and ok:
+                problems.append("invalid_case_body_is_valid")
     if cat == "happy" and ep.body_schema is not None and ep.body_required and req.get("body") is None:
         problems.append("happy_missing_required_body")
     return problems, warnings
+
+
+def _setup_closure(case: dict, index: dict[str, tuple[dict, Endpoint]]) -> tuple[set[str], list[str]]:
+    """(ids reachable through `setup`, problems found while walking: unknown ids, cycles)."""
+    problems: list[str] = []
+    seen: set[str] = set()
+    stack = list(case.get("setup") or [])
+    while stack:
+        sid = stack.pop()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        if sid not in index:
+            continue
+        stack.extend(index[sid][0].get("setup") or [])
+    if case.get("id") in seen:
+        problems.append("setup_cycle")
+    return seen, problems
+
+
+def validate_state(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, index: dict[str, tuple[dict, Endpoint]],
+                   endpoints: dict[tuple[str, str], Endpoint]) -> list[str]:
+    """Checks for the stateful fields: setup (order exists), captures (referenced ones exist), teardown (honest)."""
+    problems: list[str] = []
+    setup, captures, td = case.get("setup"), case.get("captures"), case.get("teardown")
+    if setup is not None and not (isinstance(setup, list) and all(isinstance(x, str) for x in setup)):
+        problems.append("bad_setup")
+        setup = []
+    if captures is not None and not (
+        isinstance(captures, dict) and all(CAPTURE_NAME.match(k) and k not in BUILTIN and isinstance(v, str) and v
+                                           for k, v in captures.items())
+    ):
+        problems.append("bad_captures")
+        captures = {}
+    for sid in setup or []:
+        if sid == case.get("id"):
+            problems.append("setup_self")
+        elif sid not in index:
+            problems.append(f"setup_unknown:{sid}")
+    closure, cyc = _setup_closure({**case, "setup": setup or []}, index)
+    problems += cyc
+    available = {name for sid in closure if sid in index for name in (index[sid][0].get("captures") or {})}
+    req = case.get("request", {})
+    for name in sorted(names_in(req) - BUILTIN - available):
+        problems.append(f"capture_unknown:{name}")
+    if td is not None:
+        if not isinstance(td, dict):
+            return problems + ["bad_teardown"]
+        tep = endpoints.get((str(td.get("method")), str(td.get("path"))))
+        if tep is None:
+            problems.append("teardown_unknown_endpoint")
+        else:
+            unsafe = tep.method not in SAFE_METHODS
+            if bool(td.get("destructive")) != unsafe:
+                problems.append("teardown_destructive_mislabelled")
+            if unsafe and (not cfg.allow_writes or not cfg.host_allowed()) or any(tep.path.startswith(b) for b in cfg.blocked_paths):
+                problems.append("teardown_not_allowed")
+            given, needed = set(td.get("path_params", {})), {p.name for p in tep.params if p.location == "path"}
+            if given != needed:
+                problems.append(f"teardown_path_params_mismatch:{sorted(needed ^ given)}")
+        if td.get("auth", "none") not in ("none", "valid", "bad"):
+            problems.append("bad_auth_mode")
+        own = set(captures or {})
+        for name in sorted(names_in(td.get("path_params", {})) - BUILTIN - own):
+            problems.append(f"teardown_needs_capture:{name}")
+    return problems
 
 
 def run_validate(api: str) -> dict:
@@ -94,19 +165,38 @@ def run_validate(api: str) -> dict:
     by_op = {operation_id(e): e for e in load_endpoints(api)}
     verdicts: dict[str, dict] = {}
     seen: set[str] = set()
-    for cf in load_case_files(api):
+    files = load_case_files(api)
+    index = {c["id"]: (c, by_op[cf["operation_id"]]) for cf in files if cf["operation_id"] in by_op for c in cf["cases"]}
+    by_key = {(e.method, e.path): e for e in by_op.values()}
+    for cf in files:
         ep = by_op.get(cf["operation_id"])
         for case in cf["cases"]:
             if ep is None:
                 verdicts[case["id"]] = {"verdict": "drop", "problems": ["unknown_endpoint"], "warnings": []}
                 continue
             problems, warnings = validate_case(case, ep, cfg, spec)
+            problems += validate_state(case, ep, cfg, index, by_key)
             fingerprint = json.dumps([ep.method, ep.path, case["request"], case.get("expect")], sort_keys=True, default=str)
             if fingerprint in seen:
                 problems.append("duplicate")
             seen.add(fingerprint)
             verdict = "ok" if not problems else ("drop" if set(problems) & HARD_DROP else "fix")
             verdicts[case["id"]] = {"verdict": verdict, "problems": problems, "warnings": warnings}
+    # A case whose setup case will not run cannot run either (repeat until chains settle).
+    for _ in range(len(verdicts) + 1):
+        changed = False
+        for cf in files:
+            for case in cf["cases"]:
+                v = verdicts.get(case["id"])
+                if not v or v["verdict"] != "ok":
+                    continue
+                bad = [sid for sid in case.get("setup") or [] if sid in verdicts and verdicts[sid]["verdict"] != "ok"]
+                if bad:
+                    v["verdict"] = "fix"
+                    v["problems"] += [f"setup_not_runnable:{sid}" for sid in bad]
+                    changed = True
+        if not changed:
+            break
     # The case-validator agent's semantic judgement. It may only make a verdict stricter, never loosen one.
     review = workspace.read_json(api, "validation_review.json", {"cases": {}}).get("cases", {})
     rank = {"ok": 0, "fix": 1, "drop": 2}

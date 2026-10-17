@@ -27,7 +27,7 @@ Expect `[422]` by default; record the real status (400 vs 422) via the run.
 Valid-shaped but nonexistent id in path params (e.g. a large int, a random uuid). Expect 404 where the contract has it.
 
 ## conflict
-Only for create/update endpoints with uniqueness. Repeat a create with the same unique field (needs a prior create; mark `destructive: true`). Expect 409 or the contract's code.
+Only for create/update endpoints with uniqueness. Repeat a create with the same unique field (needs a prior create; mark `destructive: true`). Copy the happy POST body (it carries `{{nonce}}`, identical within a run) and set `"setup": ["<happy create case id>"]`, so the duplicate exists on every run and never collides with data from an earlier run. Expect 409 or the contract's code.
 
 ## observe_5xx
 Semantic probes that might expose unhandled errors: very long strings, unicode/emoji, special characters, large numbers, deeply nested JSON, empty-but-valid collections. Expect the non-5xx statuses from the contract; a 5xx is a finding, not a case failure of the tool.
