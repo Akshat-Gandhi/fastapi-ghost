@@ -10,6 +10,7 @@ import jsonschema
 from . import workspace
 from .discover import Endpoint, load_endpoints, load_spec, operation_id
 from .gen import CATEGORIES, SAFE_METHODS, load_case_files
+from .redact import SENSITIVE_HEADERS
 from .schema import with_components
 
 _EXPECT_RANGES = {
@@ -67,6 +68,9 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
     if given - names:
         problems.append(f"unknown_path_params:{sorted(given - names)}")
 
+    leaked = [h for h in req.get("headers", {}) if h.lower() in SENSITIVE_HEADERS]
+    if leaked or any(secret in json.dumps(case) for secret in workspace.secret_values(cfg)):
+        problems.append("credentials_in_case")  # cases must use the `auth` mode, never literal credentials
     if cat in _AUTH_FOR and req.get("auth") != _AUTH_FOR[cat]:
         problems.append(f"auth_mode_should_be_{_AUTH_FOR[cat]}")
     if req.get("auth") not in ("none", "valid", "bad"):

@@ -17,6 +17,7 @@ else:  # pragma: no cover
 
 SCHEMA_VERSION = 1
 INVALID_TOKEN = "ghost-invalid-token"
+DEFAULT_PUBLIC = ["/", "/health", "/healthz", "/ping", "/ready", "/openapi.json", "/docs", "/redoc"]
 
 
 def root() -> Path:
@@ -56,6 +57,7 @@ class ApiConfig:
     auth: dict[str, str] = field(default_factory=dict)  # header name -> ENV VAR NAME
     allowed_hosts: list[str] = field(default_factory=list)
     blocked_paths: list[str] = field(default_factory=list)
+    public_paths: list[str] = field(default_factory=lambda: list(DEFAULT_PUBLIC))
 
     def host_allowed(self) -> bool:
         """Writes only run against local hosts or hosts explicitly allowed."""
@@ -83,6 +85,7 @@ def load_config(api: str) -> ApiConfig:
         auth=dict(data.get("auth", {})),
         allowed_hosts=list(data.get("allowed_hosts", [])),
         blocked_paths=list(data.get("blocked_paths", [])),
+        public_paths=list(data.get("public_paths", DEFAULT_PUBLIC)),
     )
 
 
@@ -102,6 +105,8 @@ def write_default_config(api: str, url: str, source: str | None, writes: bool, f
         "allowed_hosts = []",
         "# Paths never called, e.g. destructive admin routes:",
         "blocked_paths = []",
+        "# Endpoints that are meant to work without credentials (no missing_auth cases are generated for them):",
+        f"public_paths = {json.dumps(DEFAULT_PUBLIC)}",
         "",
         "# Auth: header name = NAME OF AN ENVIRONMENT VARIABLE holding the value. Never put tokens here.",
         "[auth]",

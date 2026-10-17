@@ -44,10 +44,12 @@ def _case(op: str, n: dict, category: str, title: str, ep: Endpoint, request: di
     }
 
 
-def baseline_cases(ep: Endpoint, entry: dict, spec: dict) -> list[dict]:
+def baseline_cases(ep: Endpoint, entry: dict, spec: dict, has_auth: bool = False, public: bool = False) -> list[dict]:
+    """has_auth: api.toml configures credentials. Many apps check auth without declaring it in OpenAPI,
+    so when credentials exist every case sends them by default."""
     op, n = operation_id(ep), {}
     base = {"path_params": _path_params(ep, spec), "query": _query(ep, spec), "headers": {},
-            "body": entry.get("request_example"), "auth": "valid" if ep.secured else "none"}
+            "body": entry.get("request_example"), "auth": "valid" if (ep.secured or has_auth) else "none"}
     expected_codes = [e["status"] for e in entry["expected"]]
     success = [c for c in expected_codes if 200 <= c < 300] or [200]
     cases = [_case(op, n, "happy", "valid request returns success", ep, base, success)]
@@ -55,7 +57,7 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict) -> list[dict]:
     if ep.body_schema is not None:
         for desc, payload in mutate_invalid(ep.body_schema, entry.get("request_example"), spec):
             cases.append(_case(op, n, "invalid_payload", desc, ep, {**base, "body": payload}, [422, 400]))
-    if ep.secured:
+    if ep.secured or (has_auth and not public):
         cases.append(_case(op, n, "missing_auth", "no credentials", ep, {**base, "auth": "none"}, [401, 403]))
         cases.append(_case(op, n, "bad_auth", "invalid credentials", ep, {**base, "auth": "bad"}, [401, 403]))
     if 404 in expected_codes and any(p.location == "path" for p in ep.params):
@@ -66,6 +68,8 @@ def baseline_cases(ep: Endpoint, entry: dict, spec: dict) -> list[dict]:
 
 def run_gen(api: str) -> int:
     endpoints, spec = load_endpoints(api), load_spec(api)
+    cfg = workspace.load_config(api)
+    has_auth = bool(cfg.auth)
     contract = workspace.read_json(api, "contract.json")
     if not contract:
         raise FileNotFoundError(f"No contract for {api}. Run: ghost contract --api {api}")
@@ -74,7 +78,9 @@ def run_gen(api: str) -> int:
         entry = contract.get(key_of(ep))
         if not entry:
             continue
-        cases = baseline_cases(ep, entry, spec)
+        cases = baseline_cases(ep, entry, spec, has_auth, public=ep.path in cfg.public_paths)
+        existing = workspace.read_json(api, f"cases/{operation_id(ep)}.json", {"cases": []})["cases"]
+        cases += [c for c in existing if c.get("origin") == "agent"]  # never discard the writer agent's work
         workspace.write_json(
             api, f"cases/{operation_id(ep)}.json",
             {"operation_id": operation_id(ep), "method": ep.method, "path": ep.path, "cases": cases},
