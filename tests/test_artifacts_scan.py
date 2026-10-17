@@ -88,7 +88,9 @@ def test_sites_map_to_prefixed_endpoints(home):
     workspace.write_default_config("m", "http://t", str(FIXTURE), False)
     snapshot_spec("m", TestClient(app, base_url="http://t"))
     mapped = map_sites_to_endpoints(scan_source(FIXTURE), load_endpoints("m"))
-    assert [s.status_code for s in mapped["get_v1_items_id"]] == [404]
+    # the 404 is raised directly; the 400 in `_check` is reached through a call
+    assert [(s.status_code, s.via, s.confidence) for s in mapped["get_v1_items_id"]] == [
+        (404, [], "direct"), (400, ["_check"], "via_call")]
 
 
 def test_cli_init_and_scan(home):
