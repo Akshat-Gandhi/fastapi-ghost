@@ -4,25 +4,48 @@
 {% block content %}
 <p><a href="/projects/{{ project.id }}">&larr; {{ project.name }}</a></p>
 <h2>Run #{{ run.id }} <span class="muted">· {{ run.status }}</span></h2>
-{% if run.status == "running" %}<p class="muted">Probing endpoints&hellip; this page refreshes itself.</p>{% endif %}
+{% if run.status == "running" %}<p class="muted">Discovering, building the contract, generating and running cases&hellip; this page refreshes itself.</p>{% endif %}
 {% if run.status == "failed" %}<div class="card"><strong class="error">Run failed</strong><p class="code">{{ run.error }}</p></div>{% endif %}
 {% if run.results %}
-{% set eps = run.results.endpoints %}
-<p class="muted">{{ eps|length }} endpoints ·
-  {{ eps|selectattr("flags")|list|length }} with findings ·
-  <a href="/runs/{{ run.id }}/report.json">report.json</a></p>
+{% set rep = run.results %}{% set s = rep.summary %}
+<p class="muted">This report is informational and never blocks anything.
+  <a href="/runs/{{ run.id }}/report.md">report.md</a> · <a href="/runs/{{ run.id }}/report.json">report.json</a></p>
+<div class="card">
+  <strong>{{ s.endpoints }}</strong> endpoints · <strong>{{ s.cases_run }}</strong> cases run ·
+  <strong>{{ s.with_findings }}</strong> endpoints with findings · <strong>{{ s.drift_items }}</strong> spec changes since last run
+  <div class="muted">Outcomes: {% for k, v in s.outcomes.items() %}{{ k }} {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+</div>
+{% if rep.drift %}
+<div class="card"><strong>Spec drift</strong>
+  {% for d in rep.drift %}<div><span class="flag {{ 'bad' if d.severity == 'breaking' else 'warn' }}">{{ d.severity }}</span>
+    <span class="code">{{ d.where }}</span> {{ d.detail }}</div>{% endfor %}</div>
+{% endif %}
 <div class="card table-wrap"><table>
 <thead><tr><th>Endpoint</th><th>Declared</th><th>Observed</th><th>p95</th><th>Flags</th></tr></thead>
 <tbody>
-{% for e in eps %}
+{% for e in rep.endpoints %}
 <tr>
   <td class="code">{{ e.method }} {{ e.path }}</td>
   <td class="code">{{ e.declared_codes|join(", ") }}</td>
-  <td class="code">{% if e.skipped %}<span class="muted">{{ e.skipped }}</span>{% elif e.error %}<span class="error">{{ e.error }}</span>{% else %}{{ e.observed_codes.keys()|join(", ") }}{% endif %}</td>
+  <td class="code">{{ e.observed_codes|join(", ") }}</td>
   <td>{% if e.latency_ms.p95 is not none %}{{ "%.0f"|format(e.latency_ms.p95) }}ms{% endif %}</td>
-  <td>{% for f in e.flags %}<span class="flag {{ 'bad' if f in ('5XX','UNDECLARED') else 'warn' }}">{{ f }}</span>{% endfor %}</td>
+  <td>{% for f in e.flags %}<span class="flag {{ 'bad' if f in ('5XX','UNDECLARED','DRIFT') else 'warn' }}">{{ f }}</span>{% endfor %}</td>
 </tr>
 {% endfor %}
 </tbody></table></div>
+<h3>Per-API detail</h3>
+{% for e in rep.endpoints %}
+<details class="card">
+  <summary class="code">{{ e.method }} {{ e.path }}</summary>
+  <ul>{% for c in e.cases %}
+    <li><span class="flag {{ 'bad' if c.outcome in ('5xx','mismatch','error') else ('warn' if c.outcome == 'flaky' else '') }}">{{ c.outcome }}</span>
+      {{ c.category }}: {{ c.title }} <span class="muted">(expected {{ c.expected|join("/") }}, got {{ c.status }})</span></li>
+  {% else %}<li class="muted">No cases ran for this endpoint.</li>{% endfor %}</ul>
+  {% if e.error_responses %}<strong>What the client sees on errors</strong>
+  <ul>{% for er in e.error_responses %}
+    <li><span class="code">{{ er.status }}</span>{% if er.internal_raise_site %} <span class="muted">raised at {{ er.internal_raise_site }}</span>{% endif %}
+      <div class="code muted">{{ er.body|tojson }}</div></li>{% endfor %}</ul>{% endif %}
+</details>
+{% endfor %}
 {% endif %}
 {% endblock %}

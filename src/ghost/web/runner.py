@@ -8,9 +8,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from sqlalchemy.orm import sessionmaker
 
-from ..discover import discover
-from ..probe import probe_all
-from ..report import to_dict
+from .. import workspace
+from ..pipeline import run_pipeline
 from .db import Project, Run, utcnow
 from .security import decrypt_headers
 
@@ -32,19 +31,28 @@ def execute_run(factory: sessionmaker, run_id: int) -> None:
     with factory() as db:
         run = db.get(Run, run_id)
         project = db.get(Project, run.project_id)
+        slug = f"project-{project.id}"  # one persistent workspace per project: contract + drift survive runs
+        cfg = None
         try:
             base_url = resolve_url(project.base_url)
-            headers = decrypt_headers(project.headers_enc)
-            with httpx.Client(timeout=15.0, headers=headers) as client:
-                endpoints = discover(base_url, client)
-                results = probe_all(
-                    base_url, endpoints, client,
-                    allow_writes=project.allow_writes, samples=project.samples,
-                )
-            run.results = to_dict(results)
+            host = urlsplit(base_url).hostname or ""
+            cfg = workspace.ApiConfig(
+                base_url=base_url.rstrip("/"),
+                allow_writes=project.allow_writes,
+                samples=project.samples,
+                auth_values=decrypt_headers(project.headers_enc),
+                # Ticking "allow writes" in the UI is the explicit consent for this host.
+                allowed_hosts=[host] if project.allow_writes else [],
+            )
+            workspace.set_override(slug, cfg)
+            with httpx.Client(timeout=cfg.timeout_s) as client:
+                run.results = {**run_pipeline(slug, client), "api": project.name}
             run.status = "done"
         except Exception as exc:  # report the failure on the run instead of losing it
             run.status = "failed"
-            run.error = f"{type(exc).__name__}: {exc}"
+            message = f"{type(exc).__name__}: {exc}"
+            run.error = workspace.scrub_secrets(message, cfg) if cfg else message
+        finally:
+            workspace.clear_override(slug)
         run.finished_at = utcnow()
         db.commit()

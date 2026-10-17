@@ -7,7 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -199,6 +199,14 @@ def create_app(factory: sessionmaker | None = None) -> FastAPI:
     def run_json(run_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
         run = own_run(run_id, db, user)
         return JSONResponse({"status": run.status, "error": run.error, **(run.results or {})})
+
+    @app.get("/runs/{run_id}/report.md")
+    def run_markdown(run_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+        from ..report import render_markdown
+        run = own_run(run_id, db, user)
+        if not run.results:
+            raise HTTPException(404, "Report not ready")
+        return PlainTextResponse(render_markdown(run.results), media_type="text/markdown; charset=utf-8")
 
     return app
 

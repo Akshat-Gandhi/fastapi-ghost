@@ -157,26 +157,8 @@ def report(api: str = typer.Option(..., help="API name from `ghost init`.")) -> 
 @app.command()
 def pipeline(api: str = typer.Option(..., help="API name from `ghost init`.")) -> None:
     """Run S1..S8 with no agents (deterministic baseline). Always exits 0 on findings."""
-    from .contract import run_contract
-    from .explain import make_bundles
-    from .gen import run_gen
-    from .report import write_report
-    from .runner import run_all
-    from .scan import run_scan
-    from .validate import run_validate
-
-    def go():
-        cfg = workspace.load_config(api)
-        with httpx.Client(timeout=cfg.timeout_s) as client:
-            snapshot_spec(api, client)
-        run_scan(api)
-        run_contract(api)
-        run_gen(api)
-        run_validate(api)
-        run_all(api)
-        make_bundles(api)
-        return write_report(api)
-    rep = _guard(go)
+    from .pipeline import run_pipeline
+    rep = _guard(lambda: run_pipeline(api))
     s = rep["summary"]
     typer.echo(f"{api}: {s['endpoints']} endpoints, {s['cases_run']} cases, {s['with_findings']} with findings")
     typer.echo(f"Report: {workspace.api_dir(api)}/report.md")

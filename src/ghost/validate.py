@@ -75,7 +75,7 @@ def validate_case(case: dict, ep: Endpoint, cfg: workspace.ApiConfig, spec: dict
         problems.append(f"auth_mode_should_be_{_AUTH_FOR[cat]}")
     if req.get("auth") not in ("none", "valid", "bad"):
         problems.append("bad_auth_mode")
-    if cat == "happy" and ep.secured and not cfg.auth:
+    if cat == "happy" and ep.secured and not cfg.has_auth():
         warnings.append("endpoint_is_secured_but_no_auth_configured")
 
     if ep.body_schema is not None and "body" in req:
