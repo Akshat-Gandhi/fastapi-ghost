@@ -384,3 +384,21 @@ def test_setup_case_that_cannot_run_blocks_dependents(env):
     assert v["post_items.happy.1"]["verdict"] == "fix"
     assert "setup_not_runnable:post_items.happy.1" in v["get_items_item_id.happy.1"]["problems"]
     assert v["get_items_item_id.happy.1"]["verdict"] == "fix"
+
+
+def test_teardown_delete_retries_once_on_stale_connection(env):
+    state, client, prepare = env
+    prepare()
+    real, seen = client.request, {"n": 0}
+
+    def stale_once(method, url, **kw):
+        if method == "DELETE" and "params" not in kw:
+            seen["n"] += 1
+            if seen["n"] == 1:
+                raise httpx.RemoteProtocolError("server closed")
+        return real(method, url, **kw)
+
+    client.request = stale_once
+    run_all("x", client)
+    saved = json.loads((workspace.api_dir("x") / "results" / "results.json").read_text())
+    assert seen["n"] == 2 and saved["teardown"][0]["outcome"] in ("ok", "gone")
